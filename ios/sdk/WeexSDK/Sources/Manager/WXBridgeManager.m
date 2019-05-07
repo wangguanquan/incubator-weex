@@ -33,6 +33,8 @@
 #import "WXThreadSafeMutableArray.h"
 #import "WXComponentManager.h"
 #import "WXCoreBridge.h"
+#import "WXDataRenderHandler.h"
+#import "WXHandlerFactory.h"
 
 @interface WXBridgeManager ()
 
@@ -298,21 +300,32 @@ void WXPerformBlockSyncOnBridgeThread(void (^block) (void))
     return value;
 }
 
-- (void)DownloadJS:(NSURL *)scriptUrl completion:(void (^)(NSString *script))complection;
+- (void)DownloadJS:(NSString*)instance url:(NSURL *)scriptUrl completion:(void (^)(NSString *script))complection;
 {
-    if (!scriptUrl) {
-        complection(nil);
+    if (!scriptUrl || ![scriptUrl.absoluteString length]) {
+        if (complection) {
+            complection(nil);
+        }
         return;
     }
     WXResourceRequest* request = [WXResourceRequest requestWithURL:scriptUrl];
     WXResourceLoader* jsLoader = [[WXResourceLoader alloc] initWithRequest:request];
     jsLoader.onFinished = ^(WXResourceResponse *response, NSData *data) {
         NSString* jsString = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-        complection(jsString);
+        if (complection) {
+            complection(jsString);
+        }
     };
     jsLoader.onFailed = ^(NSError *loadError) {
-        WXLogError(@"No js URL found");
-        complection(nil);
+        if (complection) {
+            complection(nil);
+        }
+
+        WXSDKInstance *sdkInstance = [WXSDKManager instanceForID:instance];
+        NSString *errorMessage = [NSString stringWithFormat:@"Request to %@ occurs an error:%@, info:%@", request.URL, loadError.localizedDescription, loadError.userInfo];
+        WXSDKErrCode errorCode = WX_KEY_EXCEPTION_JS_DOWNLOAD;
+        NSError *error = [NSError errorWithDomain:WX_ERROR_DOMAIN code:errorCode userInfo:@{NSLocalizedDescriptionKey:(errorMessage?:@"No message")}];
+        sdkInstance.onFailed(error);
     };
 
    [jsLoader start];
@@ -415,9 +428,17 @@ void WXPerformBlockSyncOnBridgeThread(void (^block) (void))
 {
     WXSDKInstance *instance = [WXSDKManager instanceForID:instanceId];
     if (instance.dataRender) {
-        WXPerformBlockOnComponentThread(^{
-            [WXCoreBridge fireEvent:instanceId ref:ref event:type args:params?:@{} domChanges:domChanges?:@{}];
-        });
+        id<WXDataRenderHandler> dataRenderHandler = [WXHandlerFactory handlerForProtocol:@protocol(WXDataRenderHandler)];
+        if (dataRenderHandler) {
+            WXPerformBlockOnComponentThread(^{
+                [dataRenderHandler fireEvent:instanceId ref:ref event:type args:params?:@{} domChanges:domChanges?:@{}];
+            });
+        }
+        else {
+            WXSDKErrCode errorCode = WX_ERR_EAGLE_RENDER;
+            NSError *error = [NSError errorWithDomain:WX_ERROR_DOMAIN code:errorCode userInfo:@{@"message":@"No data render handler found!"}];
+            instance.onFailed(error);
+        }
         return;
     }
 
@@ -476,14 +497,28 @@ void WXPerformBlockSyncOnBridgeThread(void (^block) (void))
     NSArray *args = nil;
     if (keepAlive) {
         args = @[[funcId copy], params? [params copy]:@"\"{}\"", @true];
-    }else {
+    } else {
         args = @[[funcId copy], params? [params copy]:@"\"{}\""];
     }
     WXSDKInstance *instance = [WXSDKManager instanceForID:instanceId];
-
-    WXCallJSMethod *method = [[WXCallJSMethod alloc] initWithModuleName:@"jsBridge" methodName:@"callback" arguments:args instance:instance];
-    [self callJsMethod:method];
-}
+    if (instance.wlasmRender) {
+        id<WXDataRenderHandler> dataRenderHandler = [WXHandlerFactory handlerForProtocol:@protocol(WXDataRenderHandler)];
+        if (dataRenderHandler) {
+            id strongArgs = params ? [params copy]:@"\"{}\"";
+            WXPerformBlockOnComponentThread(^{
+                [dataRenderHandler invokeCallBack:instanceId function:funcId args:strongArgs keepAlive:keepAlive];
+            });
+        }
+        else {
+            WXSDKErrCode errorCode = WX_ERR_EAGLE_RENDER;
+            NSError *error = [NSError errorWithDomain:WX_ERROR_DOMAIN code:errorCode userInfo:@{@"message":@"No data render handler found!"}];
+            instance.onFailed(error);
+        }
+    }
+    else {
+        WXCallJSMethod *method = [[WXCallJSMethod alloc] initWithModuleName:@"jsBridge" methodName:@"callback" arguments:args instance:instance];
+        [self callJsMethod:method];
+    }}
 
 - (void)callBack:(NSString *)instanceId funcId:(NSString *)funcId params:(id)params
 {

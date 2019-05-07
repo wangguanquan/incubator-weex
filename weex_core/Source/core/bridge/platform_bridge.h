@@ -25,6 +25,7 @@
 #include <string>
 #include <vector>
 #include "base/common.h"
+#include "base/closure.h"
 #include "include/WeexApiHeader.h"
 
 namespace WeexCore {
@@ -169,6 +170,11 @@ class PlatformBridge {
                                      const char* method, const char* arguments,
                                      int arguments_length, const char* options,
                                      int options_length) = 0;
+#if OS_IOS
+    virtual std::unique_ptr<ValueWithType> RegisterPluginModule(const char *name, const char *class_name, const char *version) = 0;
+    virtual std::unique_ptr<ValueWithType> RegisterPluginComponent(const char *name, const char *class_name, const char *version) = 0;
+    virtual void PostTaskOnComponentThread(const weex::base::Closure closure) = 0;
+#endif
     virtual void SetTimeout(const char* callback_id, const char* time) = 0;
     virtual void NativeLog(const char* str_array) = 0;
     virtual int UpdateFinish(const char* page_id, const char* task, int taskLen,

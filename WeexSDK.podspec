@@ -4,7 +4,7 @@ Pod::Spec.new do |s|
 
   s.name         = "WeexSDK"
 
-  s.version      = "0.20.0"
+  s.version      = "0.24.0"
 
   s.summary      = "WeexSDK Source."
 
@@ -48,8 +48,15 @@ Pod::Spec.new do |s|
                     'weex_core/Source/include/**/*.{h,hpp,m,mm,c,cpp,cc}'
   s.exclude_files = 'weex_core/Source/**/*android.{h,hpp,m,mm,c,cpp,cc}',
                     'weex_core/Source/base/android',
+                    'weex_core/Source/base/base64',
                     'weex_core/Source/base/crash',
                     'weex_core/Source/base/utils',
+                    'weex_core/Source/base/thread',
+                    'weex_core/Source/base/third_party',
+                    'weex_core/Source/base/message_loop',
+                    'weex_core/Source/base/time_point.*',
+                    'weex_core/Source/base/time_utils.*',
+                    'weex_core/Source/base/time_unit.*',
                     'weex_core/Source/third_party/IPC',
                     'weex_core/Source/core/network/android/',
                     'weex_core/Source/include/JavaScriptCore/',
@@ -69,6 +76,7 @@ Pod::Spec.new do |s|
                           'ios/sdk/WeexSDK/Sources/Component/WXRichText.h',
                           'ios/sdk/WeexSDK/Sources/Component/WXIndicatorComponent.h',
                           'ios/sdk/WeexSDK/Sources/Component/WXAComponent.h',
+                          'ios/sdk/WeexSDK/Sources/Component/WXRefreshComponent.h',
                           'ios/sdk/WeexSDK/Sources/Component/Recycler/WXRecyclerComponent.h',
                           'ios/sdk/WeexSDK/Sources/Controller/WXBaseViewController.h',
                           'ios/sdk/WeexSDK/Sources/Controller/WXRootViewController.h',
@@ -87,10 +95,14 @@ Pod::Spec.new do |s|
                           'ios/sdk/WeexSDK/Sources/Manager/WXSDKManager.h',
                           'ios/sdk/WeexSDK/Sources/Manager/WXBridgeManager.h',
                           'ios/sdk/WeexSDK/Sources/Manager/WXComponentManager.h',
+                          'ios/sdk/WeexSDK/Sources/Manager/WXComponentFactory.h',
+                          'ios/sdk/WeexSDK/Sources/Manager/WXInvocationConfig.h',
                           'ios/sdk/WeexSDK/Sources/Engine/WXSDKEngine.h',
                           'ios/sdk/WeexSDK/Sources/Engine/WXSDKError.h',
+                          'ios/sdk/WeexSDK/Sources/Eagle/WXDataRenderHandler.h',
                           'ios/sdk/WeexSDK/Sources/Utility/WXConvert.h',
                           'ios/sdk/WeexSDK/Sources/Utility/WXUtility.h',
+                          'ios/sdk/WeexSDK/Sources/Utility/WXConvertUtility.h',
                           'ios/sdk/WeexSDK/Sources/Utility/WXLog.h',
                           'ios/sdk/WeexSDK/Sources/Utility/WXDefine.h',
                           'ios/sdk/WeexSDK/Sources/Utility/WXType.h',
@@ -98,9 +110,11 @@ Pod::Spec.new do |s|
                           'ios/sdk/WeexSDK/Sources/Utility/WXAppConfiguration.h',
                           'ios/sdk/WeexSDK/Sources/Performance/WXApmForInstance.h',
                           'ios/sdk/WeexSDK/Sources/Bridge/JSContext+Weex.h',
+                          'ios/sdk/WeexSDK/Sources/Bridge/WXBridgeMethod.h',
                           'weex_core/Source/core/layout/flex_enum.h',
                           'weex_core/Source/core/layout/layout.h',
-                          'weex_core/Source/core/layout/style.h'
+                          'weex_core/Source/core/layout/style.h',
+                          'weex_core/Source/core/bridge/eagle_bridge.h'
 
   s.module_map = 'WeexSDK.modulemap'
 
@@ -112,7 +126,7 @@ Pod::Spec.new do |s|
   s.prefix_header_file = 'ios/sdk/WeexSDK/Sources/Supporting Files/WeexSDK-Prefix.pch'
 
   s.xcconfig = { "OTHER_LINK_FLAG" => '$(inherited) -ObjC' }
-  s.pod_target_xcconfig = { 'USER_HEADER_SEARCH_PATHS' => '${PODS_ROOT}/WeexSDK/weex_core/Source/ ${PROJECT_DIR}/../../../weex_core/Source',
+  s.pod_target_xcconfig = { 'USER_HEADER_SEARCH_PATHS' => '${PODS_TARGET_SRCROOT}/weex_core/Source/ ${PROJECT_DIR}/../../../weex_core/Source',
     'GCC_PREPROCESSOR_DEFINITIONS' => 'OS_IOS=1' }
 
   s.frameworks = 'CoreMedia','MediaPlayer','AVFoundation','AVKit','JavaScriptCore','GLKit','OpenGLES','CoreText','QuartzCore','CoreGraphics'

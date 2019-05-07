@@ -24,6 +24,8 @@
 #define WEEXV8_WEEXENV_H
 
 #include <mutex>
+#include <task/weex_task.h>
+#include "android/jsengine/task/back_to_weex_core_queue.h"
 
 #include "android/jsengine/task/timer_queue.h"
 #include "android/jsengine/weex_ipc_server.h"
@@ -38,16 +40,13 @@ public:
         return env_;
     }
 
+    WeexEnv();
+
+    ~WeexEnv();
 
     bool useWson();
 
     void setUseWson(bool useWson);
-
-
-    TimerQueue *timerQueue();
-
-    void setTimerQueue(TimerQueue *timerQueue);
-
 
     WeexCore::ScriptBridge *scriptBridge();
 
@@ -78,20 +77,59 @@ public:
     }
 
 
-private:
+    void initIPC();
+
+    void initJSC(bool isMultiProgress);
+
+    void setEnableBackupThread(bool enable) {
+        this->enableBackupThread__ = enable;
+    }
+
+    bool enableBackupThread() {
+        return enableBackupThread__;
+    }
+
+    void jsc_init_finished() { isJscInitOk_ = true; };
+
+    bool is_jsc_init_finished() {return isJscInitOk_; }
+
+    ThreadLocker* locker() { return &thread_locker_; }
+
+    void init_crash_handler(std::string crashFileName);
+
+    bool is_app_crashed();
+ public:
+    std::unique_ptr<BackToWeexCoreQueue> m_back_to_weex_core_thread;
+    volatile bool isMultiProcess = false;
+    std::unique_ptr<WeexIPCClient> m_ipc_client_;
+
+    std::deque<WeexTask *> m_task_cache_;
+
+ private:
     static WeexEnv *env_;
 
-    volatile bool isMultiProcess = true;
-    volatile bool isUsingWson = true;
+    volatile bool isJscInitOk_ = false;
 
-    std::unique_ptr<TimerQueue> weexTimerQueue_;
+    volatile bool isUsingWson = true;
 
     WeexCore::ScriptBridge *scriptBridge_;
 
+    bool enableBackupThread__ = false;
 
     volatile int ipcClientFd_;
     volatile int ipcServerFd_;
     volatile bool enableTrace_;
+
+    volatile bool m_cache_task_;
+ public:
+  volatile bool can_m_cache_task_() const;
+  void set_m_cache_task_(volatile bool m_cache_task_);
+ private:
+
+  ThreadLocker thread_locker_;
+
+   std::unique_ptr<crash_handler::CrashHandlerInfo> crashHandler;
+
 };
 
 

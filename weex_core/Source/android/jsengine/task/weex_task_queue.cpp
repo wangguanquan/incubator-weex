@@ -29,7 +29,13 @@
 #include "android/jsengine/object/weex_env.h"
 
 void WeexTaskQueue::run(WeexTask *task) {
+    if(task == nullptr || WeexEnv::getEnv()->is_app_crashed()) {
+        return;
+    }
+    task->timeCalculator->set_task_name(task->taskName());
+    task->timeCalculator->taskStart();
     task->run(weexRuntime);
+    task->timeCalculator->taskEnd();
     delete task;
 }
 
@@ -55,6 +61,11 @@ WeexTask *WeexTaskQueue::getTask() {
         if (taskQueue_.empty()) {
             threadLocker.unlock();
             continue;
+        }
+
+        if(WeexEnv::getEnv()->is_app_crashed()) {
+          threadLocker.unlock();
+          return nullptr;
         }
 
         assert(!taskQueue_.empty());
@@ -108,14 +119,13 @@ static void *startThread(void *td) {
     self->isInitOk = true;
 
     if (self->weexRuntime == nullptr) {
-        self->weexRuntime = new WeexRuntime(WeexEnv::getEnv()->scriptBridge(), self->isMultiProgress);
+        self->weexRuntime = new WeexRuntime(new TimerQueue(self),WeexEnv::getEnv()->scriptBridge(), self->isMultiProgress);
         // init IpcClient in Js Thread
-        if (self->isMultiProgress) {
-            auto *client = new WeexIPCClient(WeexEnv::getEnv()->getIpcClientFd());
-            static_cast<weex::bridge::js::CoreSideInMultiProcess *>(weex::bridge::js::ScriptBridgeInMultiProcess::Instance()->core_side())->set_ipc_client(
-                    client);
-        }
-        WeexEnv::getEnv()->setTimerQueue(new TimerQueue(self));
+//        if (self->isMultiProgress) {
+//            auto *client = new WeexIPCClient(WeexEnv::getEnv()->getIpcClientFd());
+//            static_cast<weex::bridge::js::CoreSideInMultiProcess *>(weex::bridge::js::ScriptBridgeInMultiProcess::Instance()->core_side())->set_ipc_client(
+//                    client);
+//        }
     }
 
     auto pTask = self->getTask();
