@@ -31,6 +31,7 @@
 #include <iostream>
 #include <fstream>
 #include <unistd.h>
+#include <dlfcn.h>
 #include "android/weex_extend_js_api.h"
 #include "android/utils/so_utils.h"
 #include "android/bridge/platform/android_bridge_in_multi_process.h"
@@ -45,6 +46,7 @@
 
 static bool s_in_find_icu = false;
 static std::string g_crashFileName;
+
 static void doExec(int fdClient, int fdServer, bool traceEnable, bool startupPie);
 
 static int copyFile(const char *SourceFile, const char *NewFile);
@@ -111,8 +113,11 @@ struct WeexJSConnection::WeexJSConnectionImpl {
     pid_t child{0};
 };
 
-WeexJSConnection::WeexJSConnection()
+WeexJSConnection::WeexJSConnection(WeexConnInfo* client, WeexConnInfo *server)
         : m_impl(new WeexJSConnectionImpl) {
+  this->client_.reset(client);
+  this->server_.reset(server);
+
   if (SoUtils::crash_file_path() != nullptr) {
     if (checkDirOrFileIsLink(SoUtils::crash_file_path())) {
         std::string tmp = SoUtils::crash_file_path();
@@ -141,10 +146,6 @@ WeexJSConnection::~WeexJSConnection() {
   end();
 }
 
-struct ThreadData {
-    int ipcServerFd;
-    IPCHandler *ipcServerHandler;
-};
 // -1 unFinish, 0 error, 1 success
 enum NewThreadStatus {
     UNFINISH,
@@ -155,73 +156,77 @@ enum NewThreadStatus {
 static volatile int newThreadStatus = UNFINISH;
 
 static void *newIPCServer(void *_td) {
-    ThreadData *td = static_cast<ThreadData *>(_td);
-    void *base = mmap(nullptr, IPCFutexPageQueue::ipc_size, PROT_READ | PROT_WRITE, MAP_SHARED,
-                      td->ipcServerFd, 0);
+    WeexConnInfo  *server = static_cast<WeexConnInfo *>(_td);
+    void *base = server->base_mem_;
+
     if (base == MAP_FAILED) {
         LOGE("newIPCServer start map filed errno %d ", errno);
         int _errno = errno;
-        close(td->ipcServerFd);
         //throw IPCException("failed to map ashmem region: %s", strerror(_errno));
         newThreadStatus = ERROR;
+        base::android::DetachFromVM();
         return nullptr;
     }
 
-    IPCHandler *handler = td->ipcServerHandler;
+    IPCHandler *handler = server->handler.get();
     std::unique_ptr<IPCFutexPageQueue> futexPageQueue(
             new IPCFutexPageQueue(base, IPCFutexPageQueue::ipc_size, 0));
     const std::unique_ptr<IPCHandler> &testHandler = createIPCHandler();
     std::unique_ptr<IPCSender> sender(createIPCSender(futexPageQueue.get(), handler));
     std::unique_ptr<IPCListener> listener =std::move(createIPCListener(futexPageQueue.get(), handler)) ;
     newThreadStatus = SUCCESS;
+    WeexCore::WeexCoreManager::Instance()->server_queue_=futexPageQueue.get();
 
     try {
       futexPageQueue->spinWaitPeer();
       listener->listen();
     } catch (IPCException &e) {
-        LOGE("server died");
-        close(td->ipcServerFd);
+        LOGE("IPCException server died %s",e.msg());
+        WeexCore::WeexCoreManager::Instance()->server_queue_= nullptr;
+        if (WeexCoreManager::Instance()->do_release_map()){
+            futexPageQueue.reset();
+        }
         base::android::DetachFromVM();
         pthread_exit(NULL);
+    }
+    WeexCore::WeexCoreManager::Instance()->server_queue_= nullptr;
+    if (WeexCoreManager::Instance()->do_release_map()){
+        futexPageQueue.reset();
     }
     return nullptr;
 }
 
-
-IPCSender *WeexJSConnection::start(IPCHandler *handler, IPCHandler *serverHandler, bool reinit) {
-  int fd = ashmem_create_region("WEEX_IPC_CLIENT", IPCFutexPageQueue::ipc_size);
-  if (-1 == fd) {
-    throw IPCException("failed to create ashmem region: %s", strerror(errno));
+IPCSender *WeexJSConnection::start(bool reinit) {
+  if(client_== nullptr || client_.get() == nullptr) {
+    return nullptr;
   }
-  void *base = mmap(nullptr, IPCFutexPageQueue::ipc_size, PROT_READ | PROT_WRITE, MAP_SHARED,
-                    fd, 0);
+
+  if(server_ == nullptr || server_.get() == nullptr) {
+    return nullptr;
+  }
+
+  void *base = client_->base_mem_;
   if (base == MAP_FAILED) {
     int _errno = errno;
-    close(fd);
     throw IPCException("failed to map ashmem region: %s", strerror(_errno));
   }
+
   std::unique_ptr<IPCFutexPageQueue> futexPageQueue(
           new IPCFutexPageQueue(base, IPCFutexPageQueue::ipc_size, 0));
-  std::unique_ptr<IPCSender> sender(createIPCSender(futexPageQueue.get(), handler));
+  std::unique_ptr<IPCSender> sender(createIPCSender(futexPageQueue.get(), client_->handler.get()));
   m_impl->serverSender = std::move(sender);
   m_impl->futexPageQueue = std::move(futexPageQueue);
 
-  int fd2 = ashmem_create_region("WEEX_IPC_SERVER", IPCFutexPageQueue::ipc_size);
-  if (-1 == fd2) {
-    throw IPCException("failed to create ashmem region: %s", strerror(errno));
-  }
-  ThreadData td = { static_cast<int>(fd2), static_cast<IPCHandler *>(serverHandler) };
-
+  WeexCore::WeexCoreManager::Instance()->client_queue_=m_impl->futexPageQueue.get();
   pthread_attr_t threadAttr;
   newThreadStatus = UNFINISH;
 
   pthread_attr_init(&threadAttr);
   pthread_t ipcServerThread;
-  int i = pthread_create(&ipcServerThread, &threadAttr, newIPCServer, &td);
+  int i = pthread_create(&ipcServerThread, &threadAttr, newIPCServer, server_.get());
   if(i != 0) {
     throw IPCException("failed to create ipc server thread");
   }
-
   while (newThreadStatus == UNFINISH) {
     continue;
   }
@@ -252,7 +257,7 @@ IPCSender *WeexJSConnection::start(IPCHandler *handler, IPCHandler *serverHandle
 
 //  static bool startupPie = s_start_pie;
   static bool startupPie = SoUtils::pie_support();
-  LOGE("startupPie :%d", startupPie);
+  __android_log_print(ANDROID_LOG_ERROR,"weex","startupPie :%d", startupPie);
 
   pid_t child;
   if (reinit) {
@@ -271,23 +276,19 @@ IPCSender *WeexJSConnection::start(IPCHandler *handler, IPCHandler *serverHandle
   if (child == -1) {
     int myerrno = errno;
     munmap(base, IPCFutexPageQueue::ipc_size);
-    close(fd);
-    close(fd2);
     throw IPCException("failed to fork: %s", strerror(myerrno));
   } else if (child == 0) {
-    LOGE("weexcore fork child success\n");
+    __android_log_print(ANDROID_LOG_ERROR,"weex","weexcore fork child success\n");
     // the child
-    closeAllButThis(fd, fd2);
+    closeAllButThis(client_->ipcFd, server_->ipcFd);
     // implements close all but handles[1]
     // do exec
-    doExec(fd, fd2, true, startupPie);
-    LOGE("exec Failed completely.");
+    doExec(client_->ipcFd, server_->ipcFd, true, startupPie);
+    __android_log_print(ANDROID_LOG_ERROR,"weex","exec Failed completely.");
     // failed to exec
     _exit(1);
   } else {
     printLogOnFile("fork success on main process and start m_impl->futexPageQueue->spinWaitPeer()");
-    close(fd);
-    close(fd2);
     m_impl->child = child;
     try {
       m_impl->futexPageQueue->spinWaitPeer();
@@ -305,6 +306,7 @@ IPCSender *WeexJSConnection::start(IPCHandler *handler, IPCHandler *serverHandle
 
 void WeexJSConnection::end() {
   try {
+    WeexCoreManager::Instance()->client_queue_ = nullptr;
     m_impl->serverSender.reset();
     m_impl->futexPageQueue.reset();
   } catch (IPCException &e) {
@@ -345,11 +347,11 @@ static void findIcuDataPath(std::string &icuDataPath) {
   fseek(f,0L,SEEK_END);
   int size=ftell(f);
 
-    LOGE("file size is %d",size);
+    LOGD("file size is %d",size);
     struct stat statbuf;
     stat("/proc/self/maps",&statbuf);
     int size1=statbuf.st_size;
-    LOGE("file size1 is %d",size1);
+    LOGD("file size1 is %d",size1);
   char buffer[256];
   char *line;
   while ((line = fgets(buffer, 256, f))) {
@@ -412,7 +414,7 @@ void doExec(int fdClient, int fdServer, bool traceEnable, bool startupPie) {
   std::string executablePath;
   std::string icuDataPath;
   if(SoUtils::jss_icu_path() != nullptr) {
-    LOGE("jss_icu_path not null %s",SoUtils::jss_icu_path());
+    __android_log_print(ANDROID_LOG_ERROR,"weex", "jss_icu_path not null %s",SoUtils::jss_icu_path());
     icuDataPath = SoUtils::jss_icu_path();
   } else {
     s_in_find_icu = true;
@@ -439,8 +441,7 @@ void doExec(int fdClient, int fdServer, bool traceEnable, bool startupPie) {
     executablePath.replace(pos, libName.length(), "");
 
   if (executablePath.empty()) {
-    LOGE("executablePath is empty");
-
+    __android_log_print(ANDROID_LOG_ERROR,"weex","executablePath is empty");
 #if PRINT_LOG_CACHEFILE
     mcfile << "jsengine WeexJSConnection::doExec executablePath is empty and return" << std::endl;
     mcfile.close();
@@ -448,10 +449,10 @@ void doExec(int fdClient, int fdServer, bool traceEnable, bool startupPie) {
 
     return;
   } else {
-    LOGE("executablePath is %s", executablePath.c_str());
+    __android_log_print(ANDROID_LOG_ERROR,"weex","executablePath is %s", executablePath.c_str());
   }}
   if (icuDataPath.empty()) {
-    LOGE("icuDataPath is empty");
+    __android_log_print(ANDROID_LOG_ERROR,"weex","icuDataPath is empty");
 #if PRINT_LOG_CACHEFILE
     mcfile << "jsengine WeexJSConnection::doExec icuDataPath is empty and return" << std::endl;
     mcfile.close();
@@ -501,13 +502,13 @@ void doExec(int fdClient, int fdServer, bool traceEnable, bool startupPie) {
     chmod(executableName.c_str(), 0755);
     int result = access(executableName.c_str(), 01);
 
-    LOGE("doExec access result %d executableName %s \n", result, executableName.c_str());
+    __android_log_print(ANDROID_LOG_ERROR,"weex", "doExec access result %d executableName %s \n", result, executableName.c_str());
 #if PRINT_LOG_CACHEFILE
     mcfile << "jsengine WeexJSConnection::doExec file exist result:"
            << result << " startupPie:" << startupPie << std::endl;
 #endif
     if (result == -1) {
-      executableName = std::string(SoUtils::cache_dir()) + '/' + start_so;
+      executableName = std::string(SoUtils::jsb_so_path());
       int result_cache = access(executableName.c_str(), 00);
       if (result_cache == -1) {
         std::string sourceSo = executablePath + '/' + start_so;
@@ -525,7 +526,7 @@ void doExec(int fdClient, int fdServer, bool traceEnable, bool startupPie) {
       const char *argv[] = {executableName.c_str(), fdStr, fdServerStr, traceEnable ? "1" : "0", g_crashFileName.c_str(), nullptr};
       if (-1 == execve(argv[0], const_cast<char *const *>(&argv[0]),
                        const_cast<char *const *>(envp.get()))) {
-          LOGE("aaaaaaaa execve failed errno %s \n", strerror(errno));
+        __android_log_print(ANDROID_LOG_ERROR,"weex","execve failed errno %s \n", strerror(errno));
 #if PRINT_LOG_CACHEFILE
         mcfile << "execve failed11:" << strerror(errno) << std::endl;
 #endif
@@ -540,7 +541,7 @@ void doExec(int fdClient, int fdServer, bool traceEnable, bool startupPie) {
       const char *argv[] = {executableName.c_str(), fdStr, fdServerStr, traceEnable ? "1" : "0", g_crashFileName.c_str(), nullptr};
       if (-1 == execve(argv[0], const_cast<char *const *>(&argv[0]),
                        const_cast<char *const *>(envp.get()))) {
-          LOGE("bbbbbbbbbbbb execve failed errno %s \n", strerror(errno));
+        __android_log_print(ANDROID_LOG_ERROR,"weex","execve failed errno %s \n", strerror(errno));
 #if PRINT_LOG_CACHEFILE
         mcfile << "execve failed:" << strerror(errno) << std::endl;
 #endif
@@ -605,4 +606,109 @@ int copyFile(const char *SourceFile, const char *NewFile) {
     in.close();
     return 1;
   }
+}
+
+void *WeexConnInfo::mmap_for_ipc() {
+  pid_t pid = getpid();
+  std::string fileName(this->is_client ? "WEEX_IPC_CLIENT" : "WEEX_IPC_SERVER");
+  fileName += std::to_string(pid);
+  int fd = -1;
+  int initTimes = 1;
+  void *base = MAP_FAILED;
+  do {
+    fd = memfd_create(fileName.c_str(), IPCFutexPageQueue::ipc_size);
+    if (-1 == fd) {
+      if (this->is_client) {
+        throw IPCException("failed to create ashmem region: %s", strerror(errno));
+      } else {
+        LOGE("failed to create ashmem region: %s", strerror(errno))
+        return base;
+      }
+    }
+    base = mmap(nullptr, IPCFutexPageQueue::ipc_size, PROT_READ | PROT_WRITE, MAP_SHARED,
+                fd, 0);
+    if (base == MAP_FAILED) {
+      close(fd);
+      fd = -1;
+      int _errno = errno;
+      initTimes++;
+      if (_errno == EBADF || _errno == EACCES) {
+        LOGE("start map filed errno %d should retry", errno);
+        continue;
+      } else {
+        if (this->is_client) {
+          throw IPCException("start map filed errno %d", errno);
+        } else {
+          LOGE("start map filed errno %d", errno)
+        }
+        break;
+      }
+    }
+  } while ((initTimes <= 2) && base == MAP_FAILED);
+  this->ipcFd = fd;
+  return base;
+}
+
+int WeexConnInfo::memfd_create(const char *name, size_t size) {
+  if (SoUtils::android_api() <= __ANDROID_API_P__) {
+    return ashmem_create_region(name, size);
+  }
+
+
+  int fd = 0;
+  if (SoUtils::android_api() >= 29) {
+    fd = memfd_create_androidR(name, size);
+    if (fd != 0) {
+      return fd;
+    }
+  }
+  return memfd_create_below_androidR(name, size);
+}
+typedef int (*ASharedMemory_create_func_ptr)(const char *name, size_t size);
+typedef int (*ASharedMemory_setProt_func_ptr)(int fd, int prot);
+int WeexConnInfo::memfd_create_below_androidR(const char *name, size_t size) {
+  static auto handle = dlopen("libandroid.so", RTLD_LAZY | RTLD_LOCAL);
+  if (handle == RTLD_DEFAULT) {
+    return -1;
+  }
+  int fd;
+  static ASharedMemory_create_func_ptr funcPtr =
+      (handle != nullptr) ? reinterpret_cast<ASharedMemory_create_func_ptr>(dlsym(handle,
+                                                                                  "ASharedMemory_create"))
+                          : nullptr;
+  if (funcPtr) {
+    fd = funcPtr(name, size);
+    if (fd < 0)
+      return fd;
+    static auto funcSetProt =
+        reinterpret_cast<ASharedMemory_setProt_func_ptr>(dlsym(handle, "ASharedMemory_setProt"));
+    if (!funcSetProt) {
+      return -1;
+    }
+    funcSetProt(fd, PROT_READ | PROT_WRITE | PROT_EXEC);
+    return fd;
+  }
+  return -1;
+}
+
+int WeexConnInfo::memfd_create_androidR(const char *name, size_t size) {
+  JNIEnv *env = base::android::AttachCurrentThread();
+  jclass wx_env = env->FindClass("org/apache/weex/WXEnvironment");
+  if (wx_env) {
+    jmethodID m_memfd_create_id =
+        env->GetStaticMethodID(wx_env, "memfd_create", "(Ljava/lang/String;I)I");
+
+    if (m_memfd_create_id) {
+      jint i =
+          env->CallStaticIntMethod(wx_env, m_memfd_create_id, env->NewStringUTF(name), (jint) size);
+      __android_log_print(ANDROID_LOG_ERROR,
+                          "dyy",
+                          "memfd_create_androidR %d  %s  %d",
+                          i,
+                          name,
+                          size);
+      return i;
+    }
+  }
+  return -1;
 }

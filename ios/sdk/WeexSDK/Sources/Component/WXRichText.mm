@@ -27,14 +27,20 @@
 #import "WXImgLoaderProtocol.h"
 #import "WXComponentManager.h"
 #import "WXLog.h"
+#import "WXDarkSchemeProtocol.h"
 #include <pthread/pthread.h>
 
 @interface WXRichNode : NSObject
 
 @property (nonatomic, strong) NSString  *type;
+@property (nonatomic, strong) NSString  *ref;
 @property (nonatomic, strong) NSString  *text;
 @property (nonatomic, strong) UIColor   *color;
+@property (nonatomic, strong) UIColor   *darkSchemeColor;
+@property (nonatomic, strong) UIColor   *lightSchemeColor;
 @property (nonatomic, strong) UIColor   *backgroundColor;
+@property (nonatomic, strong) UIColor   *darkSchemeBackgroundColor;
+@property (nonatomic, strong) UIColor   *lightSchemeBackgroundColor;
 @property (nonatomic, strong) NSString  *fontFamily;
 @property (nonatomic, assign) CGFloat   fontSize;
 @property (nonatomic, assign) CGFloat   fontWeight;
@@ -46,10 +52,18 @@
 @property (nonatomic, strong) NSURL *href;
 @property (nonatomic, strong) NSURL *src;
 @property (nonatomic, assign) NSRange range;
+@property (nonatomic, strong) NSMutableArray *childNodes;
 
 @end
 
 @implementation WXRichNode
+- (instancetype)init
+{
+    if (self = [super init]) {
+        _childNodes = [[NSMutableArray alloc] init];
+    }
+    return self;
+}
 
 @end
 
@@ -82,7 +96,9 @@ do {\
     id value = styles[@#key]; \
     if (value) { \
         node.key = [WXConvert type:value];\
-    } else if (!([@#key isEqualToString:@"backgroundColor"] || [@#key isEqualToString:@"textDecoration"]) && superNode.key ) { \
+    } else if (!([@#key isEqualToString:@"backgroundColor"] || \
+        [@#key isEqualToString:@"weexDarkSchemeBackgroundColor"] || \
+        [@#key isEqualToString:@"textDecoration"]) && superNode.key ) { \
         node.key = superNode.key; \
     } \
 } while(0);
@@ -153,6 +169,9 @@ do {\
 - (void)fillAttributes:(NSDictionary *)attributes
 {
     id value = attributes[@"value"];
+    if (!value) {
+        return;
+    }
     if ([value isKindOfClass:[NSString class]]) {
         value = [WXUtility objectFromJSON:value];
     }
@@ -162,7 +181,6 @@ do {\
         WXRichNode *rootNode = [[WXRichNode alloc]init];
         [_richNodes addObject:rootNode];
         
-        //记录richtext根节点styles，仅用于子节点的样式继承
         rootNode.type = @"root";
         if (_styles) {
             [self fillCSSStyles:_styles toNode:rootNode superNode:nil];
@@ -172,14 +190,18 @@ do {\
             [self recursivelyAddChildNode:dict toSuperNode:rootNode];
         }
         
-        _backgroundColor = rootNode.backgroundColor?:[UIColor whiteColor];
+        _backgroundColor = rootNode.backgroundColor?:[UIColor clearColor];
     }
 }
 
 - (void)fillCSSStyles:(NSDictionary *)styles toNode:(WXRichNode *)node superNode:(WXRichNode *)superNode
 {
     WX_STYLE_FILL_RICHTEXT(color, UIColor)
+    WX_STYLE_FILL_RICHTEXT(darkSchemeColor, UIColor)
+    WX_STYLE_FILL_RICHTEXT(lightSchemeColor, UIColor)
     WX_STYLE_FILL_RICHTEXT(backgroundColor, UIColor)
+    WX_STYLE_FILL_RICHTEXT(darkSchemeBackgroundColor, UIColor)
+    WX_STYLE_FILL_RICHTEXT(lightSchemeBackgroundColor, UIColor)
     WX_STYLE_FILL_RICHTEXT(fontFamily, NSString)
     WX_STYLE_FILL_RICHTEXT_PIXEL(fontSize)
     WX_STYLE_FILL_RICHTEXT(fontWeight, WXTextWeight)
@@ -250,6 +272,79 @@ do {\
             }
         }
     }
+}
+
+- (WXRichNode*)findRichNode:(NSString*)ref {
+    NSMutableArray *array = [NSMutableArray arrayWithArray:_richNodes];
+    for (WXRichNode* node in array) {
+        if ([node.ref isEqualToString:ref]) {
+            return node;
+        }
+    }
+    return nil;
+}
+
+- (NSInteger)indexOfRichNode:(WXRichNode*)node {
+    NSInteger index = -1;
+    NSMutableArray *array = [NSMutableArray arrayWithArray:_richNodes];
+    for (WXRichNode* item in array) {
+        if ([item.ref isEqualToString:node.ref]) {
+            return index+1;
+        }
+        index++;
+    }
+    return index;
+}
+
+- (void)removeChildNode:(NSString*)ref superNodeRef:(NSString *)superNodeRef {
+    WXRichNode* node = [self findRichNode:ref];
+    WXRichNode* superNode = [self findRichNode:@"_root"];
+    if (superNodeRef.length > 0) {
+        superNode = [self findRichNode:superNodeRef];
+    }
+    if (superNode) {
+         [superNode.childNodes removeObject:node];
+    }
+    [_richNodes removeObject:node];
+    [self setNeedsLayout];
+    [self innerLayout];
+}
+
+- (void)addChildNode:(NSString *)type ref:(NSString*)ref styles:(NSDictionary*)styles attributes:(NSDictionary*)attributes  toSuperNodeRef:(NSString *)superNodeRef {
+    if ([_richNodes count] == 0) {
+        WXRichNode *rootNode = [[WXRichNode alloc]init];
+        [_richNodes addObject:rootNode];
+        rootNode.type = @"root";
+        rootNode.ref = @"_root";
+        if (_styles) {
+            [self fillCSSStyles:_styles toNode:rootNode superNode:nil];
+        }
+        _backgroundColor = rootNode.backgroundColor?:[UIColor clearColor];
+    }
+
+    WXRichNode* superNode = [self findRichNode:@"_root"];
+    if (superNodeRef.length > 0) {
+        superNode = [self findRichNode:superNodeRef];
+    }
+
+    WXRichNode *node = [[WXRichNode alloc]init];
+    node.ref = ref;
+    NSInteger index = [self indexOfRichNode:superNode];
+    if (index < 0) {
+        return;
+    }
+    if (index == 0) {
+        [_richNodes addObject:node];
+    } else {
+        [_richNodes insertObject:node atIndex:(index + superNode.childNodes.count + 1)];
+    }
+    [superNode.childNodes addObject:node];
+    node.type = type;
+
+    [self fillCSSStyles:styles toNode:node superNode:superNode];
+    [self fillAttributes:attributes toNode:node superNode:superNode];
+    [self setNeedsLayout];
+    [self innerLayout];
 }
 
 #pragma mark - Subclass
@@ -337,6 +432,20 @@ do {\
     };
 }
 
+- (void)schemeDidChange:(NSString*)scheme
+{
+    [super schemeDidChange:scheme];
+    if ([self isViewLoaded]) {
+        // Force inner layout
+        [self innerLayout];
+    }
+}
+
+- (WXColorScene)colorSceneType
+{
+    return WXColorSceneText;
+}
+
 #pragma mark Text Building
 
 - (NSMutableAttributedString *)buildAttributeString
@@ -350,6 +459,16 @@ do {\
     NSMutableAttributedString *attrStr = [[NSMutableAttributedString alloc] init];
     NSUInteger location;
     
+    BOOL invert = self.invertForDarkScheme;
+    
+    // Invert default background color.
+    UIColor* defaultTextColor = [UIColor blackColor];
+    UIColor* defaultBackgroundColor = _backgroundColor;
+    if (invert && [self.weexInstance isDarkScheme]) {
+        defaultTextColor = [[WXSDKInstance darkSchemeColorHandler] getInvertedColorFor:[UIColor blackColor] ofScene:[self colorSceneType] withDefault:[UIColor blackColor]];
+        defaultBackgroundColor = [[WXSDKInstance darkSchemeColorHandler] getInvertedColorFor:_backgroundColor ofScene:[self colorSceneType] withDefault:_backgroundColor];
+    }
+    
     __weak typeof(self) weakSelf = self;
     for (WXRichNode *node in array) {
         location = attrStr.length;
@@ -360,8 +479,10 @@ do {\
                 [attrStr.mutableString appendString:text];
                 
                 NSRange range = NSMakeRange(location, text.length);
-                [attrStr addAttribute:NSForegroundColorAttributeName value:node.color ?: [UIColor blackColor] range:range];
-                [attrStr addAttribute:NSBackgroundColorAttributeName value:node.backgroundColor ?: _backgroundColor range:range];
+                UIColor* textColor = [self.weexInstance chooseColor:node.color lightSchemeColor:node.lightSchemeColor darkSchemeColor:node.darkSchemeColor invert:invert scene:[self colorSceneType]];
+                UIColor* bgColor = [self.weexInstance chooseColor:node.backgroundColor lightSchemeColor:node.lightSchemeBackgroundColor darkSchemeColor:node.darkSchemeBackgroundColor invert:invert scene:[self colorSceneType]];
+                [attrStr addAttribute:NSForegroundColorAttributeName value:textColor ?: defaultTextColor range:range];
+                [attrStr addAttribute:NSBackgroundColorAttributeName value:bgColor ?: defaultBackgroundColor range:range];
                 
                 UIFont *font = [WXUtility fontWithSize:node.fontSize textWeight:node.fontWeight textStyle:WXTextStyleNormal fontFamily:node.fontFamily scaleFactor:self.weexInstance.pixelScaleFactor];
                 if (font) {
@@ -457,10 +578,42 @@ do {\
     });
 }
 
+- (void)updateChildNodeStyles:(NSDictionary *)styles ref:(NSString*)ref parentRef:(NSString*)parentRef {
+    WXPerformBlockOnComponentThread(^{
+        WXRichNode* node =  [self findRichNode:ref];
+        if (node) {
+            WXRichNode* superNode = [self findRichNode:@"_root"];
+            if (parentRef.length > 0) {
+                superNode = [self findRichNode:parentRef];
+            }
+            if (superNode) {
+                [self fillCSSStyles:styles toNode:node superNode:superNode];
+                [self syncTextStorageForView];
+            }
+        }
+    });
+}
+
 - (void)updateAttributes:(NSDictionary *)attributes {
     WXPerformBlockOnComponentThread(^{
         _attributes = [NSMutableDictionary dictionaryWithDictionary:attributes];
         [self syncTextStorageForView];
+    });
+}
+
+- (void)updateChildNodeAttributes:(NSDictionary *)attributes ref:(NSString*)ref parentRef:(NSString*)parentRef {
+    WXPerformBlockOnComponentThread(^{
+        WXRichNode* node =  [self findRichNode:ref];
+        if (node) {
+            WXRichNode* superNode = [self findRichNode:@"_root"];
+            if (parentRef.length > 0) {
+                superNode = [self findRichNode:parentRef];
+            }
+            if (superNode) {
+                [self fillAttributes:attributes toNode:node superNode:superNode];
+                [self syncTextStorageForView];
+            }
+        }
     });
 }
 

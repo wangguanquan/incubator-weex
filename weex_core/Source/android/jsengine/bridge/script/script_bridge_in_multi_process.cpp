@@ -75,7 +75,7 @@ static void *threadEntry(void *_td) {
     return static_cast<void **>(nullptr);
 }
 
-extern "C" int serverMain(int argc, char **argv) {
+__attribute__((visibility("default"))) extern "C" int serverMain(int argc, char **argv) {
     unsigned long fd;
     unsigned long fd_client = 0;
     unsigned long enableTrace;
@@ -101,6 +101,7 @@ extern "C" int serverMain(int argc, char **argv) {
 namespace weex {
     namespace bridge {
         namespace js {
+            bool ScriptBridgeInMultiProcess::has_read_alarm_config = false;
 
             static inline const char* GetUTF8StringFromIPCArg(IPCArguments* arguments, size_t index) {
                 return arguments->getByteArray(index)->length == 0 ? nullptr : arguments->getByteArray(index)->content;
@@ -218,6 +219,14 @@ namespace weex {
                                          ExecJSOnInstance);
                 handler->registerHandler(static_cast<uint32_t>(IPCJSMsg::UPDATEGLOBALCONFIG),
                                          UpdateGlobalConfig);
+                handler->registerHandler(static_cast<uint32_t>(IPCJSMsg::UpdateInitFrameworkParams),
+                                         UpdateInitFrameworkParams);
+
+                handler->registerHandler(static_cast<uint32_t>(IPCJSMsg::SETLOGLEVEL),
+                                         setLogType);
+
+                handler->registerHandler(static_cast<uint32_t>(IPCJSMsg::JSACTION),
+                                         JsAction);
             }
 
             std::unique_ptr<IPCResult> ScriptBridgeInMultiProcess::InitFramework(
@@ -253,8 +262,13 @@ namespace weex {
                     init_framework_params->value = IPCByteArrayToWeexByteArray(ba);
 
                     if(!WeexEnv::getEnv()->enableBackupThread()) {
+#ifdef USE_JS_RUNTIME
+                        std::string type = init_framework_params->type->content;
+                        std::string value = init_framework_params->value->content;
+#else
                         auto type = String::fromUTF8(init_framework_params->type->content);
                         auto value = String::fromUTF8(init_framework_params->value->content);
+#endif
                         if(type == "enableBackupThread") {
                             auto enable = value == "true";
                             LOGE("enable backupThread %d",enable);
@@ -263,6 +277,20 @@ namespace weex {
                             auto enable = value == "true";
                             LOGE("enable backupThreadCache %d",enable);
                             WeexEnv::getEnv()->set_m_cache_task_(enable);
+                        }
+                    }
+                    if (!has_read_alarm_config){
+#ifdef USE_JS_RUNTIME
+                        std::string type = init_framework_params->type->content;
+                        std::string value = init_framework_params->value->content;
+#else
+                        auto type = String::fromUTF8(init_framework_params->type->content);
+                        auto value = String::fromUTF8(init_framework_params->value->content);
+#endif
+                        if (type == "enableAlarmSignal"){
+                            has_read_alarm_config = true;
+                            auto enable = value =="true";
+                            WeexEnv::getEnv()->enableHandleAlarmSignal(enable);
                         }
                     }
 
@@ -417,8 +445,6 @@ namespace weex {
 
             std::unique_ptr<IPCResult> ScriptBridgeInMultiProcess::CreateInstance(
                     IPCArguments *arguments) {
-                LOGD("ScriptBridgeInMultiProcess::CreateInstance");
-
                 const char *instanceID = GetUTF8StringFromIPCArg(arguments, 0);
                 const char *func = GetUTF8StringFromIPCArg(arguments, 1);
                 const char *script = GetUTF8StringFromIPCArg(arguments, 2);
@@ -447,6 +473,7 @@ namespace weex {
                     init_framework_params->value = IPCByteArrayToWeexByteArray(ba);
                     params.push_back(init_framework_params);
                 }
+                LOG_TLOG("jsEngine","ScriptBridgeInMultiProcess::CreateInstance and Id is : %s", instanceID);
                 auto result = createInt32Result(Instance()->script_side()->CreateInstance(
                                         instanceID, func, script, opts, initData, extendsApi,params));
                 freeInitFrameworkParams(params);
@@ -471,8 +498,9 @@ namespace weex {
                 LOGD("ScriptBridgeInMultiProcess::ExecJSONInstance");
                 const char *instanceID = GetUTF8StringFromIPCArg(arguments, 0);
                 const char *script = GetUTF8StringFromIPCArg(arguments, 1);
+                int type = arguments->get<int32_t>(2);
 
-                const std::unique_ptr<WeexJSResult> &ptr = Instance()->script_side()->ExecJSOnInstance(instanceID, script);
+                const std::unique_ptr<WeexJSResult> &ptr = Instance()->script_side()->ExecJSOnInstance(instanceID, script,type);
 
                 return createByteArrayResult(ptr->data.get(), ptr->length);
             }
@@ -484,6 +512,49 @@ namespace weex {
                 Instance()->script_side()->UpdateGlobalConfig(configString);
                 return createVoidResult();
             }
+
+            std::unique_ptr<IPCResult> ScriptBridgeInMultiProcess::UpdateInitFrameworkParams(
+                    IPCArguments *arguments) {
+                LOGD("ScriptBridgeInMultiProcess::UpdateInitFrameworkParams");
+                const char *key = GetUTF8StringFromIPCArg(arguments, 0);
+                const char *value = GetUTF8StringFromIPCArg(arguments, 1);
+                const char *desc = GetUTF8StringFromIPCArg(arguments, 2);
+                Instance()->script_side()->UpdateInitFrameworkParams(key, value, desc);
+                LOGD("ScriptBridgeInMultiProcess::UpdateInitFrameworkParams End");
+                return createVoidResult();
+            }
+
+        std::unique_ptr<IPCResult> ScriptBridgeInMultiProcess::setLogType(
+            IPCArguments *arguments) {
+            LOGD("ScriptBridgeInMultiProcess::setLogType");
+            int type = arguments->get<int32_t>(0);
+            int perf = arguments->get<int32_t>(1);
+            Instance()->script_side()->SetLogType(type, perf == 1);
+
+            return createVoidResult();
+        }
+
+        std::unique_ptr<IPCResult> ScriptBridgeInMultiProcess::JsAction(
+            IPCArguments *arguments) {
+            LOGD("ScriptBridgeInMultiProcess::JsAction");
+            const long ctxContainer = (long) (arguments->get<int64_t>(0));
+            const int32_t jsActionType = arguments->get<int32_t>(1);
+            
+            if(jsActionType == static_cast<int32_t>(JSACTION::CREATE)) {
+                LOGE_TAG("dyyLog","JSACTION::CREATE")
+                auto jsActionCtx = WeexEnv::getEnv()->createJSAction(ctxContainer);
+                return createInt64Result((long)(jsActionCtx));
+            } else if(jsActionType == static_cast<int32_t>(JSACTION::DESTROY)) {
+                LOGE_TAG("dyyLog", "adelete JSActionTask");
+                WeexEnv::getEnv()->destroyJSAction(ctxContainer);
+                return createInt32Result(static_cast<int32_t>(true));
+            }
+
+            const char *args = GetUTF8StringFromIPCArg(arguments, 2);
+            Instance()->script_side()->JsAction(ctxContainer, jsActionType, args);
+            return createInt32Result(static_cast<int32_t>(true));
+        }
+
 
             std::unique_ptr<IPCResult> ScriptBridgeInMultiProcess::TakeHeapSnapshot(
                     IPCArguments *arguments) {

@@ -38,11 +38,14 @@
 #import "WXConfigCenterProtocol.h"
 #import "WXTextComponent.h"
 #import "WXAssert.h"
+#import "WXDarkSchemeProtocol.h"
 
 #define KEY_PASSWORD  @"com.taobao.Weex.123456"
 #define KEY_USERNAME_PASSWORD  @"com.taobao.Weex.weex123456"
 
 static BOOL enableRTLLayoutDirection = YES;
+static BOOL isDarkSchemeSupportEnabled = YES;
+static BOOL enableAdaptiveLayout = NO;
 
 void WXPerformBlockOnMainThread(void (^ _Nonnull block)(void))
 {
@@ -160,17 +163,38 @@ CGFloat WXFloorPixelValue(CGFloat value)
 + (WXLayoutDirection)getEnvLayoutDirection {
     // We not use the below technique, because your app maybe not support the first preferredLanguages
     // _sysLayoutDirection = [NSLocale characterDirectionForLanguage:[[NSLocale preferredLanguages] objectAtIndex:0]] == NSLocaleLanguageDirectionRightToLeft ? WXLayoutDirectionRTL : WXLayoutDirectionLTR;
-    if (@available(iOS 9.0, *)) {
-        // The view is shown in right-to-left mode right now.
-        return [UIView userInterfaceLayoutDirectionForSemanticContentAttribute:UISemanticContentAttributeUnspecified] == UIUserInterfaceLayoutDirectionRightToLeft ? WXLayoutDirectionRTL : WXLayoutDirectionLTR;
-    } else {
-        // Use the previous technique
-        return [[UIApplication sharedApplication] userInterfaceLayoutDirection] == UIUserInterfaceLayoutDirectionRightToLeft ? WXLayoutDirectionRTL : WXLayoutDirectionLTR;
+    return [UIView userInterfaceLayoutDirectionForSemanticContentAttribute:UISemanticContentAttributeUnspecified] == UIUserInterfaceLayoutDirectionRightToLeft ? WXLayoutDirectionRTL : WXLayoutDirectionLTR;
+}
+
++ (BOOL)isSystemInDarkScheme
+{
+    if (@available(iOS 13.0, *)) {
+        __block BOOL result = NO;
+        WXPerformBlockSyncOnMainThread(^{
+#ifdef __IPHONE_13_0
+            id<WXDarkSchemeProtocol> darkSchemeHandler = [WXSDKInstance darkSchemeColorHandler];
+            if ([darkSchemeHandler respondsToSelector:@selector(isApplicationUsingDarkScheme)]) {
+                result = [darkSchemeHandler isApplicationUsingDarkScheme];
+                return;
+            }
+            
+            if ([UITraitCollection currentTraitCollection].userInterfaceStyle == UIUserInterfaceStyleDark) {
+                result = YES;
+            }
+#endif
+        });
+        return result;
     }
+    return NO;
 }
 
 + (NSDictionary *)getEnvironment
 {
+    NSString* currentScheme = @"light";
+    if ([WXUtility isDarkSchemeSupportEnabled]) {
+        currentScheme = [self isSystemInDarkScheme] ? @"dark" : @"light";
+    }
+    
     NSString *platform = @"iOS";
     NSString *sysVersion = [[UIDevice currentDevice] systemVersion] ?: @"";
     NSString *weexVersion = WX_SDK_VERSION;
@@ -193,7 +217,8 @@ CGFloat WXFloorPixelValue(CGFloat value)
                                     @"deviceWidth":@(deviceWidth * scale),
                                     @"deviceHeight":@(deviceHeight * scale),
                                     @"scale":@(scale),
-                                    @"layoutDirection": [self getEnvLayoutDirection] == WXLayoutDirectionRTL ? @"rtl" : @"ltr"
+                                    @"layoutDirection": [self getEnvLayoutDirection] == WXLayoutDirectionRTL ? @"rtl" : @"ltr",
+                                    @"scheme": currentScheme
                                 }];
     
     if ([[[UIDevice currentDevice] systemVersion] integerValue] >= 11) {
@@ -215,6 +240,20 @@ CGFloat WXFloorPixelValue(CGFloat value)
     }
     
     return data;
+}
+
+static BOOL gIsEnvironmentUsingDarkScheme = NO;
+
++ (NSDictionary *_Nonnull)getEnvironmentForJSContext
+{
+    NSDictionary* result = [self getEnvironment];
+    gIsEnvironmentUsingDarkScheme = [result[@"scheme"] isEqualToString:@"dark"];
+    return result;
+}
+
++ (BOOL)isEnvironmentUsingDarkScheme
+{
+    return gIsEnvironmentUsingDarkScheme;
 }
 
 + (NSDictionary *)getDebugEnvironment {
@@ -263,6 +302,38 @@ CGFloat WXFloorPixelValue(CGFloat value)
     if ([json isEqualToString:@"{}"]) return @{}.mutableCopy;
     if ([json isEqualToString:@"[]"]) return @[].mutableCopy;
     return [self JSONObject:[json dataUsingEncoding:NSUTF8StringEncoding] error:nil];
+}
+
++ (id _Nullable)convertContainerToImmutable:(id _Nullable)source
+{
+    if (source == nil) {
+        return nil;
+    }
+    
+    if ([source isKindOfClass:[NSArray class]]) {
+        NSMutableArray* tmpArray = [[NSMutableArray alloc] init];
+        for (id obj in source) {
+            if (obj == nil) {
+                /* srouce may be a subclass of NSArray and the subclassed
+                 array may return nil in its overridden objectAtIndex: method.
+                 So obj could be nil!!!. */
+                continue;
+            }
+            [tmpArray addObject:[self convertContainerToImmutable:obj]];
+        }
+        id immutableArray = [NSArray arrayWithArray:tmpArray];
+        return immutableArray ? immutableArray : tmpArray;
+    }
+    else if ([source isKindOfClass:[NSDictionary class]]) {
+        NSMutableDictionary* tmpDictionary = [[NSMutableDictionary alloc] init];
+        for (id key in [source keyEnumerator]) {
+            tmpDictionary[key] = [self convertContainerToImmutable:[source objectForKey:key]];
+        }
+        id immutableDict = [NSDictionary dictionaryWithDictionary:tmpDictionary];
+        return immutableDict ? immutableDict : tmpDictionary;
+    }
+    
+    return source;
 }
 
 + (id)JSONObject:(NSData*)data error:(NSError **)error
@@ -359,7 +430,6 @@ CGFloat WXFloorPixelValue(CGFloat value)
         return true;
     }
     if (![string isKindOfClass:[NSString class]]) {
-        WXLogError(@"%@ is not a string", string);
         return true;
     }
     if ([[string stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] length] == 0) {
@@ -371,7 +441,7 @@ CGFloat WXFloorPixelValue(CGFloat value)
 
 + (BOOL)isValidPoint:(CGPoint)point
 {
-    return !(isnan(point.x)) && !(isnan(point.y));
+    return !(isnan(point.x)) && !(isnan(point.y)); //!OCLint
 }
 
 + (NSError *)errorWithCode:(NSInteger)code message:(NSString *)message
@@ -492,7 +562,13 @@ CGFloat WXFloorPixelValue(CGFloat value)
 
 + (UIFont *)fontWithSize:(CGFloat)size textWeight:(CGFloat)textWeight textStyle:(WXTextStyle)textStyle fontFamily:(NSString *)fontFamily scaleFactor:(CGFloat)scaleFactor useCoreText:(BOOL)useCoreText
 {
-    CGFloat fontSize = (isnan(size) || size == 0) ?  32 * scaleFactor : size;
+    static NSMutableDictionary* RegisteredFontFileNames;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        RegisteredFontFileNames = [[NSMutableDictionary alloc] init];
+    });
+    
+    CGFloat fontSize = (isnan(size) || size == 0) ?  32 * scaleFactor : size; //!OCLint
     UIFont *font = nil;
     
     WXThreadSafeMutableDictionary *fontFace = [[WXRuleManager sharedInstance] getRule:@"fontFace"];
@@ -507,11 +583,53 @@ CGFloat WXFloorPixelValue(CGFloat value)
                     CGDataProviderRef fontDataProvider = CGDataProviderCreateWithURL(fontURL);
                     if (fontDataProvider) {
                         CGFontRef newFont = CGFontCreateWithDataProvider(fontDataProvider);
-                        CTFontManagerRegisterGraphicsFont(newFont, NULL);
-                        fontFamily = (__bridge_transfer  NSString*)CGFontCopyPostScriptName(newFont);
-                        CGFontRelease(newFont);
-                        CFRelease(fontURL);
-                        CFRelease(fontDataProvider);
+                        if (newFont) {
+                            fontFamily = (__bridge_transfer NSString*)CGFontCopyPostScriptName(newFont);
+                            CFErrorRef error = NULL;
+                            CTFontManagerRegisterGraphicsFont(newFont, &error);
+                            
+                            if (error == NULL) {
+                                // record which file is registered to this family name
+                                @synchronized (RegisteredFontFileNames) {
+                                    RegisteredFontFileNames[fontFamily] = fpath;
+                                }
+                            }
+                            
+                            if ([fontFamily isEqualToString:@"iconfont"]) {
+                                WXLogError(@"Using iconfont with family name 'iconfont' is prohibited.");
+                                if (error) {
+                                    WXLogError(@"Unable to register font, %@.", fontFamilyDic);
+                                    CFRelease(error);
+                                }
+                            }
+                            else {
+                                // Check if we have already registered another font file with the same family-name
+                                if (error) {
+                                    @synchronized (RegisteredFontFileNames) {
+                                        NSString* previousFilePath = RegisteredFontFileNames[fontFamily];
+                                        if (![previousFilePath isEqualToString:fpath]) {
+                                            // file path changed means a new iconfont file is registered with the same name, we use it
+                                            WXLogError(@"Unable to register font, but will unregister previous one and retry with new font file, %@.", fontFamilyDic);
+                                            CTFontManagerUnregisterGraphicsFont(newFont, NULL);
+                                            CFErrorRef error2 = NULL;
+                                            CTFontManagerRegisterGraphicsFont(newFont, &error2);
+                                            if (error2) {
+                                                WXLogError(@"We cannot register the font finally. %@", error2);
+                                                CFRelease(error2);
+                                            }
+                                            else {
+                                                RegisteredFontFileNames[fontFamily] = fpath;
+                                            }
+                                        }
+                                    }
+                                    CFRelease(error);
+                                }
+                            }
+                            
+                            CGFontRelease(newFont);
+                            CFRelease(fontURL);
+                            CFRelease(fontDataProvider);
+                        }
                     }
                 } else {
                     CTFontManagerRegisterFontsForURL(fontURL, kCTFontManagerScopeProcess, NULL);
@@ -535,24 +653,21 @@ CGFloat WXFloorPixelValue(CGFloat value)
             if (fontFamily) {
                 WXLogWarning(@"Unknown fontFamily:%@", fontFamily);
             }
-            if(WX_SYS_VERSION_LESS_THAN(@"8.2")) {
-                font = [UIFont systemFontOfSize:fontSize];
-            } else {
-                font = [UIFont systemFontOfSize:fontSize weight:textWeight];
-            }
+            font = [UIFont systemFontOfSize:fontSize weight:textWeight];
         }
     }
     UIFontDescriptor *fontD = font.fontDescriptor;
     UIFontDescriptorSymbolicTraits traits = 0;
     
-    traits = (textStyle == WXTextStyleItalic) ? (traits | UIFontDescriptorTraitItalic) : traits;
-    if (WX_SYS_VERSION_LESS_THAN(@"8.2")) {
-        traits = ((textWeight-0.4) >= 0.0) ? (traits | UIFontDescriptorTraitBold) : traits;
-    }else {
-        traits = (textWeight-UIFontWeightBold >= 0.0) ? (traits | UIFontDescriptorTraitBold) : traits;
-    }
-    if (traits != 0) {
-        fontD = [fontD fontDescriptorWithSymbolicTraits:traits];
+    traits = (textWeight-UIFontWeightBold >= 0.0) ? (traits | UIFontDescriptorTraitBold) : traits;
+    if (textStyle == WXTextStyleItalic || traits != 0) {
+        if (traits != 0) {
+            fontD = [fontD fontDescriptorWithSymbolicTraits:traits];
+        }
+        if (textStyle == WXTextStyleItalic) {
+            CGAffineTransform matrix = CGAffineTransformMake(1, 0, tanf(16 * (CGFloat)M_PI / 180), 1, 0, 0);
+            fontD = [fontD fontDescriptorWithMatrix:matrix];
+        }
         UIFont *tempFont = [UIFont fontWithDescriptor:fontD size:0];
         if (tempFont) {
             font = tempFont;
@@ -710,6 +825,10 @@ CGFloat WXFloorPixelValue(CGFloat value)
     return defaultScaleFactor;
 }
 
++ (BOOL)deviceIsiPad {
+    return [[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPad;
+}
+
 #pragma mark - RTL
 
 + (void)setEnableRTLLayoutDirection:(BOOL)value
@@ -720,6 +839,30 @@ CGFloat WXFloorPixelValue(CGFloat value)
 + (BOOL)enableRTLLayoutDirection
 {
     return enableRTLLayoutDirection;
+}
+
+#pragma mark - Dark scheme
+
++ (void)setDarkSchemeSupportEnable:(BOOL)value
+{
+    isDarkSchemeSupportEnabled = value;
+}
+
++ (BOOL)isDarkSchemeSupportEnabled
+{
+    return isDarkSchemeSupportEnabled;
+}
+
+#pragma mark - Adapt iPad
+
++ (void)setEnableAdaptiveLayout:(BOOL)value
+{
+    enableAdaptiveLayout = value;
+}
+
++ (BOOL)enableAdaptiveLayout
+{
+    return enableAdaptiveLayout;
 }
 
 #pragma mark - get deviceID
@@ -771,7 +914,6 @@ CGFloat WXFloorPixelValue(CGFloat value)
             ret = [NSKeyedUnarchiver unarchiveObjectWithData:(__bridge NSData *)keyData];
         } @catch (NSException *e) {
             NSLog(@"Unarchive of %@ failed: %@", service, e);
-        } @finally {
         }
     }
     if (keyData)

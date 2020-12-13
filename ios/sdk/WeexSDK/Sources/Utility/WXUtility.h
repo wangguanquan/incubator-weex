@@ -19,10 +19,11 @@
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import "WXDefine.h"
-#import "WXType.h"
-#import "WXLog.h"
-#import "WXSDKInstance.h"
+
+#import <WeexSDK/WXDefine.h>
+#import <WeexSDK/WXType.h>
+#import <WeexSDK/WXLog.h>
+#import <WeexSDK/WXSDKInstance.h>
 
 // The default screen width which helps us to calculate the real size or scale in different devices.
 static const CGFloat WXDefaultScreenWidth = 750.0;
@@ -130,12 +131,22 @@ _Nonnull SEL WXSwizzledSelectorForSelector(_Nonnull SEL selector);
 + (void)performBlock:(void (^_Nonnull)(void))block onThread:(NSThread *_Nonnull)thread;
 
 /**
+ * @abstract Check if system is in dark mode.
+ *
+ * @return Boolean
+ *
+ */
++ (BOOL)isSystemInDarkScheme;
+
+/**
  * @abstract Returns the environment of current application, you can get some necessary properties such as appVersion、sdkVersion、appName etc.
  *
  * @return A dictionary object which contains these properties.
  *
  */
 + (NSDictionary *_Nonnull)getEnvironment;
++ (NSDictionary *_Nonnull)getEnvironmentForJSContext;
++ (BOOL)isEnvironmentUsingDarkScheme;
 
 + (NSDictionary *_Nonnull)getDebugEnvironment;
 
@@ -158,6 +169,14 @@ _Nonnull SEL WXSwizzledSelectorForSelector(_Nonnull SEL selector);
  *
  */
 + (id _Nullable)objectFromJSON:(NSString * _Nonnull)json;
+
+/**
+ Convert all sub-structure objects of source to immutable container.
+
+ @param source Source object.
+ @return Converted object using immutable container.
+ */
++ (id _Nullable)convertContainerToImmutable:(id _Nullable)source;
 
 #define WXDecodeJson(json)  [WXUtility objectFromJSON:json]
 
@@ -271,6 +290,11 @@ _Nonnull SEL WXSwizzledSelectorForSelector(_Nonnull SEL selector);
  * @discussion If orientation is equal to landscape, the value is caculated as follows: WXScreenSize().height / WXDefaultScreenWidth, otherwise, WXScreenSize().width / WXDefaultScreenWidth.
  */
 + (CGFloat)defaultPixelScaleFactor;
+
+/**
+ * @return true if the device is iPad
+ */
++ (BOOL)deviceIsiPad;
 
 #if defined __cplusplus
 extern "C" {
@@ -493,9 +517,26 @@ BOOL WXFloatGreaterThanWithPrecision(CGFloat a,CGFloat b,double precision);
  */
 + (NSData *_Nonnull)base64DictToData:(NSDictionary *_Nullable)base64Dict;
 
+/**
+*  @abstract Switch for RTL.
+*
+*/
 + (void)setEnableRTLLayoutDirection:(BOOL)value;
-
 + (BOOL)enableRTLLayoutDirection;
+
+/**
+*  @abstract Switch for dark mode support.
+*
+*/
++ (void)setDarkSchemeSupportEnable:(BOOL)value;
++ (BOOL)isDarkSchemeSupportEnabled;
+
+/**
+*  @abstract Switch for adapt iPad.
+*
+*/
++ (void)setEnableAdaptiveLayout:(BOOL)value;
++ (BOOL)enableAdaptiveLayout;
 
 + (long) getUnixFixTimeMillis;
 

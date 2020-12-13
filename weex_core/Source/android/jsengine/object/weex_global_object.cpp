@@ -32,7 +32,7 @@
 #include "base/utils/log_utils.h"
 #include "core/bridge/script_bridge.h"
 #include "include/wtf/text/Base64.h"
-
+#include "android/jsengine/weex_jsc_utils.h"
 #define WX_GLOBAL_CONFIG_KEY "global_switch_config"
 //#define GET_CHARFROM_UNIPTR(str) (str) == nullptr ? nullptr : (reinterpret_cast<const char*>((str).get()))
 using namespace JSC;
@@ -186,11 +186,16 @@ void WeexGlobalObject::initWxEnvironment(std::vector<INIT_FRAMEWORK_PARAMS *> &p
             }
             isGlobalConfigStartUpSet = true;
         }
-
         // --------------------------------------------------------
         // add for debug mode
-        if (String("debugMode") == type && String("true") == value) {
-            Weex::LogUtil::setDebugMode(true);
+        static bool hasSet = false;
+        if(!hasSet) {
+            if (String("debugMode") == type && String("true") == value) {
+                __android_log_print(ANDROID_LOG_ERROR,"WeexCore","setDebugMode  1 ");
+                weex::base::LogImplement::getLog()->setDebugMode(true);
+                hasSet = true;
+                LOGE("jss use %s"," jsc");
+            }
         }
         // --------------------------------------------------------
 
@@ -250,7 +255,7 @@ void WeexGlobalObject::initFunction() {
             {"setIntervalWeex",       JSC::Function, NoIntrinsic, {(intptr_t) static_cast<NativeFunction>(functionSetIntervalWeex),     (intptr_t) (3)}},
             {"clearIntervalWeex",     JSC::Function, NoIntrinsic, {(intptr_t) static_cast<NativeFunction>(functionClearIntervalWeex),   (intptr_t) (1)}},
             {"callT3DLinkNative",     JSC::Function, NoIntrinsic, {(intptr_t) static_cast<NativeFunction>(functionT3DLinkNative),       (intptr_t) (2)}},
-            {"__updateComponentData",     JSC::Function, NoIntrinsic, {(intptr_t) static_cast<NativeFunction>(functionUpdateComponentData),       (intptr_t) (3)}},
+            {"__updateComponentData", JSC::Function, NoIntrinsic, {(intptr_t) static_cast<NativeFunction>(functionUpdateComponentData),       (intptr_t) (3)}},
 //            {"setNativeTimeout",      JSC::Function, NoIntrinsic, {(intptr_t) static_cast<NativeFunction>(functionNativeSetTimeout),    (intptr_t) (2)}},
 //            {"setNativeInterval",     JSC::Function, NoIntrinsic, {(intptr_t) static_cast<NativeFunction>(functionNativeSetInterval),  (intptr_t) (2)}},
 //            {"clearNativeTimeout",    JSC::Function, NoIntrinsic, {(intptr_t) static_cast<NativeFunction>(functionNativeClearTimeout),  (intptr_t) (1)}},
@@ -306,6 +311,21 @@ JSValue WeexGlobalObject::getTimerFunction(uint32_t function_id) {
     if (iter == function_maps_.end())
         return jsUndefined();
    return function_maps_[function_id].get();
+}
+
+void WeexGlobalObject::updateInitFrameworkParams(const std::string &key,
+                                                 const std::string &value) {
+
+    LOGE("updateInitFrameworkParams %s %s ", key.data(), value.data());
+    for(INIT_FRAMEWORK_PARAMS* param : m_initFrameworkParams){
+        if(key.length() == param->type->length){
+            if(strncmp(key.data(), param->type->content, key.length()) == 0){
+                WeexByteArray * oldValue = param->value;
+                param->value = genWeexByteArraySS(value.data(), value.length());
+                free(oldValue);
+            }
+        }
+    }
 }
 
 JSFUNCTION functionGCAndSweep(ExecState *exec) {
@@ -402,14 +422,6 @@ JSFUNCTION functionCallNativeModule(ExecState *state) {
     getStringArgsFromState(state, 2, methodChar);
     getWsonOrJsonArgsFromState(state, 3, arguments);
     getWsonOrJsonArgsFromState(state, 4, options);
-
-//    String a;
-//    a.append("functionCallNativeModule:");
-//    a.append(moduleChar.getValue());
-//    a.append(":");
-//    a.append(methodChar.getValue());
-//    weex::base::TimeCalculator timeCalculator(weex::base::TaskPlatform::JSS_ENGINE, a.utf8().data(), instanceId.getValue());
-//    timeCalculator.taskStart();
     auto result = globalObject->js_bridge()->core_side()->CallNativeModule(instanceId.getValue(),
                                                                            moduleChar.getValue(),
                                                                            methodChar.getValue(),
@@ -417,7 +429,6 @@ JSFUNCTION functionCallNativeModule(ExecState *state) {
                                                                            arguments.getLength(),
                                                                            options.getValue(),
                                                                            options.getLength());
-//    timeCalculator.taskEnd();
     JSValue ret;
     switch (result->type) {
         case ParamsType::DOUBLE:
@@ -873,7 +884,10 @@ JSFUNCTION functionUpdateComponentData(ExecState *state) {
     auto page_id = getCharOrJSONStringFromState(state, 0);
     auto cid = getCharOrJSONStringFromState(state, 1);
     auto json_data = getCharOrJSONStringFromState(state, 2);
-
+    if (json_data == nullptr){
+        globalObject->js_bridge()->core_side()->ReportException(page_id.get(), "UpdateComponentData", "parse json failed");
+        return JSValue::encode(jsUndefined());
+    }
     globalObject->js_bridge()->core_side()->UpdateComponentData(page_id.get(), cid.get(), json_data.get());
     return JSValue::encode(jsUndefined());
 }

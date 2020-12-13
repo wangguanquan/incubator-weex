@@ -25,6 +25,8 @@
 #import "WXUtility.h"
 #import "WXLength.h"
 #import "WXTransition.h"
+#import "WXComponent+Layout.h"
+#import "WXDarkSchemeProtocol.h"
 
 @interface WXAnimationInfo : NSObject<NSCopying>
 
@@ -206,7 +208,38 @@ WX_EXPORT_METHOD(@selector(transition:args:callback:))
     }
     CAMediaTimingFunction *timingFunction = [WXConvert CAMediaTimingFunction:args[@"timingFunction"]];
     NSDictionary *styles = args[@"styles"];
+    NSDictionary* componentRawStyles = target.styles;
+    
+    BOOL isDarkScheme = [target.weexInstance isDarkScheme];
+    BOOL updatingDarkSchemeBackgroundColor = styles[@"weexDarkSchemeBackgroundColor"] != nil;
+    BOOL updatingLightSchemeBackgroundColor = styles[@"weexLightSchemeBackgroundColor"] != nil;
+    
     for (NSString *property in styles) {
+        if ([property isEqualToString:@"backgroundColor"]) {
+            if (isDarkScheme && (updatingDarkSchemeBackgroundColor ||
+                                componentRawStyles[@"weexDarkSchemeBackgroundColor"] != nil)) {
+                /* Updating "darkSchemeBackgroundColor" in dark mode,
+                 or this component has dark bg color explicitly defined in styels.
+                 We ignore transition animation for "backgroundColor" */
+                continue;
+            }
+            else if (!isDarkScheme && (updatingLightSchemeBackgroundColor ||
+                                      componentRawStyles[@"weexLightSchemeBackgroundColor"] != nil)) {
+                continue;
+            }
+        }
+        else if ([property isEqualToString:@"weexDarkSchemeBackgroundColor"]) {
+            if (!isDarkScheme) {
+                /* Do not do animation for "darkSchemeBackgroundColor" in light mode. */
+                continue;
+            }
+        }
+        else if ([property isEqualToString:@"weexLightSchemeBackgroundColor"]){
+            if (isDarkScheme) {
+                continue;
+            }
+        }
+        
         WXAnimationInfo *info = [WXAnimationInfo new];
         info.duration = duration;
         info.delay = delay;
@@ -286,10 +319,18 @@ WX_EXPORT_METHOD(@selector(transition:args:callback:))
                 [infos addObject:newInfo];
             }
             target.transform = wxTransform;
-        } else if ([property isEqualToString:@"backgroundColor"]) {
+        } else if ([property isEqualToString:@"backgroundColor"] ||
+                   [property isEqualToString:@"weexDarkSchemeBackgroundColor"] ||
+                   [property isEqualToString:@"weexLightSchemeBackgroundColor"]) {
             info.propertyName = @"backgroundColor";
             info.fromValue = (__bridge id)(layer.backgroundColor);
-            info.toValue = (__bridge id)[WXConvert CGColor:value];
+            UIColor* toColor = [WXConvert UIColor:value];
+            if ([target.weexInstance isDarkScheme] && target.invertForDarkScheme &&
+                [property isEqualToString:@"backgroundColor"]) {
+                // Invert color
+                toColor = [[WXSDKInstance darkSchemeColorHandler] getInvertedColorFor:toColor ofScene:[target colorSceneType] withDefault:toColor];
+            }
+            info.toValue = (__bridge id)([toColor CGColor]);
             [infos addObject:info];
         } else if ([property isEqualToString:@"opacity"]) {
             info.propertyName = @"opacity";
@@ -331,16 +372,44 @@ WX_EXPORT_METHOD(@selector(transition:args:callback:))
                 transition:(WXTransition*)transition
              transitionDic:(NSMutableDictionary*)transitionDic
 {
+    if (args[@"styles"][property] == nil) {
+        return;
+    }
+    
     [transition.filterStyles setObject:args[@"styles"][property] forKey:property];
-    [transition.oldFilterStyles setObject:target.styles[property] ?:@0 forKey:property];
+    
+    id oldStyleValue = target.styles[property];
+    if (oldStyleValue == nil) {
+        oldStyleValue = [target convertLayoutValueToStyleValue:property];
+    }
+    if (oldStyleValue == nil) {
+        oldStyleValue = @"0.0";
+    }
+    [transition.oldFilterStyles setObject:oldStyleValue ?:@0 forKey:property];
+    
     [target _modifyStyles:@{property:args[@"styles"][property]}];
     [transitionDic setObject:@([args[@"duration"] doubleValue]) forKey:kWXTransitionDuration];
     [transitionDic setObject:@([args[@"delay"] doubleValue]) forKey:kWXTransitionDelay];
-    [transitionDic setObject:args[@"timingFunction"] forKey:kWXTransitionTimingFunction];
+    [transitionDic setObject:args[@"timingFunction"] ?: @"linear" forKey:kWXTransitionTimingFunction];
 }
 
 - (void)animation:(WXComponent *)targetComponent args:(NSDictionary *)args callback:(WXModuleKeepAliveCallback)callback
 {
+    /* Check if view of targetComponent is created, if not, we do not do animation and
+     simulate delay of 'duration' and callback.
+     For a view in list, the view migth be recycled, and if view is not attached to a window,
+     the CATransaction completion block will be called immediately, which may cause CPU overload
+     problem if JS code do any logic in the completion callback.
+     */
+    
+    BOOL shouldDoAnimation = NO;
+    if ([targetComponent isViewLoaded]) {
+        UIView* view = targetComponent.view;
+        if ([view window] != nil) {
+            shouldDoAnimation = YES;
+        }
+    }
+    
     /**
        UIView-style animation functions support the standard timing functions,
        but they don’t allow you to specify your own cubic Bézier curve. 
@@ -348,21 +417,31 @@ WX_EXPORT_METHOD(@selector(transition:args:callback:))
      **/
     [CATransaction begin];
     [CATransaction setAnimationTimingFunction:[WXConvert CAMediaTimingFunction:args[@"timingFunction"]]];
-    [CATransaction setCompletionBlock:^{
-        if (callback) {
-            NSDictionary *message;
-            if (_isAnimationedSuccess) {
-                message = @{@"result":@"Success",
-                            @"message":@"Success"};
+    
+    if (shouldDoAnimation) {
+        [CATransaction setCompletionBlock:^{
+            if (callback) {
+                NSDictionary *message;
+                if (_isAnimationedSuccess) {
+                    message = @{@"result":@"Success",
+                                @"message":@"Success"};
+                }
+                else
+                {
+                    message = @{@"result":@"Fail",
+                                @"message":@"Animation did not complete"};
+                }
+                callback(message, NO);
             }
-            else
-            {
-                message = @{@"result":@"Fail",
-                            @"message":@"Animation did not complete"};
-            }
-            callback(message,NO);
-        }
-    }];
+        }];
+    }
+    else if (callback) {
+        double duration = [[args objectForKey:@"duration"] doubleValue] / 1000.f;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(duration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            callback(@{@"result":@"Success",
+                       @"message":@"Success"}, NO);
+        });
+    }
     
     BOOL needLayout = NO;
     WXTransition* transition = nil;
@@ -373,6 +452,7 @@ WX_EXPORT_METHOD(@selector(transition:args:callback:))
     }
     
     [CATransaction commit];
+    
     if (needLayout && transition) {
         WXPerformBlockOnComponentThread(^{
             [transition _handleTransitionWithStyles:transitionDic resetStyles:nil target:targetComponent];
@@ -416,7 +496,7 @@ WX_EXPORT_METHOD(@selector(transition:args:callback:))
         }
     } else {
         CATransform3D transform = layer.transform;
-        if (info.target->_transform.perspective && !isinf(info.target->_transform.perspective)) {
+        if (info.target->_transform.perspective && !isinf(info.target->_transform.perspective)) { //!OCLint
             transform.m34 = -1.0/info.target->_transform.perspective*[UIScreen mainScreen].scale;
             layer.transform = transform;
         }

@@ -77,7 +77,8 @@
 
 @implementation WXTimerModule
 {
-    BOOL _tooManyTimersReported;
+    BOOL _timeoutNANReported;
+    BOOL _timeoutRepeatReported;
     NSMutableDictionary *_timers;
 }
 
@@ -162,6 +163,32 @@ WX_EXPORT_METHOD(@selector(clearInterval:))
 
 - (void)createTimerWithCallback:(NSString *)callbackID time:(NSTimeInterval)milliseconds target:(id)target selector:(SEL)selector shouldRepeat:(BOOL)shouldRepeat {
     
+    WXAssert(!isnan(milliseconds), @"Timer interval is NAN.");
+    if (isnan(milliseconds)) { //!OCLint
+        WXLogError(@"Create timer with NAN interval.");
+        
+        if (!_timeoutNANReported) {
+            [WXExceptionUtils commitCriticalExceptionRT:self.weexInstance.instanceId errCode:[NSString stringWithFormat:@"%d", WX_KEY_EXCEPTION_JS_TIMER_TIMEOUT_NAN] function:@"" exception:@"Time out is NAN." extParams:nil];
+            _timeoutNANReported = YES;
+        }
+        
+        if (shouldRepeat) {
+            /* NAN for repeatable timer, we ignore.
+             For iOS, scheduledTimerWithTimeInterval with NAN and repeate as YES would crash. */
+        }
+        else {
+            [[WXSDKManager bridgeMgr] callBack:self.weexInstance.instanceId funcId:callbackID params:nil keepAlive:NO];
+        }
+        return;
+    }
+    
+    if (milliseconds < 100 && shouldRepeat) {
+        if (!_timeoutRepeatReported) {
+            [WXExceptionUtils commitCriticalExceptionRT:self.weexInstance.instanceId errCode:[NSString stringWithFormat:@"%d", WX_KEY_EXCEPTION_JS_TIMER_REPEAT_HIGH_FREQUENCY] function:@"" exception:[NSString stringWithFormat:@"Repeated timer's timeout value too short. %fms", milliseconds] extParams:nil];
+            _timeoutRepeatReported = YES;
+        }
+    }
+    
     NSTimer *timer = [NSTimer scheduledTimerWithTimeInterval:milliseconds/1000.0f target:target selector:selector userInfo:nil repeats:shouldRepeat];
     [[NSRunLoop mainRunLoop] addTimer:timer forMode:NSRunLoopCommonModes];
     
@@ -169,11 +196,6 @@ WX_EXPORT_METHOD(@selector(clearInterval:))
         _timers[callbackID] = timer;
         
         if ([_timers count] > 30) {
-            if (!_tooManyTimersReported) {
-                [WXExceptionUtils commitCriticalExceptionRT:self.weexInstance.instanceId errCode:[NSString stringWithFormat:@"%d", WX_KEY_EXCEPTION_TOO_MANY_TIMERS] function:@"" exception:@"Too many timers." extParams:nil];
-                _tooManyTimersReported = YES;
-            }
-            
             // remove invalid timers
             NSMutableArray* invalidTimerIds = [[NSMutableArray alloc] init];
             for (NSString *cbId in _timers) {

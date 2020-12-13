@@ -60,7 +60,7 @@ FunctionsExposedByJS *ScriptBridgeInMultiSo::GetExposedFunctions() {
       ExecJSOnAppWithResult, CallJSOnAppContext, DestroyAppContext,
       ExecJSService,         ExecTimeCallback,   ExecJS,
       ExecJSWithResult,      ExecJSWithCallback, CreateInstance,     ExecJSOnInstance,
-      DestroyInstance,       UpdateGlobalConfig};
+      DestroyInstance,       UpdateGlobalConfig,  UpdateInitFrameworkParams, SetLogType, JsAction};
   auto functions = (FunctionsExposedByJS *)malloc(sizeof(FunctionsExposedByJS));
   memset(functions, 0, sizeof(FunctionsExposedByJS));
   memcpy(functions, &temp, sizeof(FunctionsExposedByJS));
@@ -141,8 +141,8 @@ int ScriptBridgeInMultiSo::CreateInstance(const char *instanceId,
 }
 
 std::unique_ptr<WeexJSResult> ScriptBridgeInMultiSo::ExecJSOnInstance(const char *instanceId,
-                                              const char *script) {
-  return Instance()->script_side()->ExecJSOnInstance(instanceId, script);
+                                              const char *script,int type) {
+  return Instance()->script_side()->ExecJSOnInstance(instanceId, script,type);
 }
 
 int ScriptBridgeInMultiSo::DestroyInstance(const char *instanceId) {
@@ -152,6 +152,20 @@ int ScriptBridgeInMultiSo::DestroyInstance(const char *instanceId) {
 int ScriptBridgeInMultiSo::UpdateGlobalConfig(const char *config) {
   return Instance()->script_side()->UpdateGlobalConfig(config);
 }
+
+int ScriptBridgeInMultiSo::UpdateInitFrameworkParams(const std::string& key, const std::string& value, const std::string& desc){
+    return Instance()->script_side()->UpdateInitFrameworkParams(key, value, desc);
+}
+
+void ScriptBridgeInMultiSo::SetLogType(const int logLevel, const bool isPerf) {
+  return Instance()->script_side()->SetLogType(logLevel, isPerf);
+}
+
+int64_t ScriptBridgeInMultiSo::JsAction(long ctxContainer, int32_t jsActionType, const char *arg) {
+   return Instance()->script_side()->JsAction(ctxContainer, jsActionType, arg);
+}
+
+
 }  // namespace js
 }  // namespace bridge
 }  // namespace weex

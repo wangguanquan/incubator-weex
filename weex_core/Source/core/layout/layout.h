@@ -183,6 +183,9 @@ namespace WeexCore {
         }
       }
 
+      const std::vector<WXCoreLayoutNode *>& get_child_list() const {return mChildList;}
+
+      void removeAllChildren() {mChildList.clear();}
   private:
 
     /**
@@ -717,7 +720,20 @@ namespace WeexCore {
           break;
         }
       }
+      
+      // also remove from BFC list, for determineChildLayoutDirection may encounter a wild pointer
+      for (int index = 0; index < BFCs.size(); index++) {
+          if (child == BFCs[index]) {
+              BFCs.erase(BFCs.begin() + index);
+              break;
+          }
+      }
+      
       markDirty();
+    }
+      
+    inline void clearBFCs() {
+        BFCs.clear();
     }
 
     inline void addChildAt(WXCoreLayoutNode* const child, Index index) {

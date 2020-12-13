@@ -68,11 +68,18 @@ class ScriptBridgeInMultiSo : public WeexCore::ScriptBridge {
                             const char *script, const char *opts,
                             const char *initData, const char *extendsApi, std::vector<INIT_FRAMEWORK_PARAMS*>& params);
 
-  static std::unique_ptr<WeexJSResult> ExecJSOnInstance(const char *instanceId, const char *script);
+  static std::unique_ptr<WeexJSResult> ExecJSOnInstance(const char *instanceId, const char *script,int type);
 
   static int DestroyInstance(const char *instanceId);
 
   static int UpdateGlobalConfig(const char *config);
+  
+  static int UpdateInitFrameworkParams(const std::string& key, const std::string& value, const std::string& desc);
+
+
+  static void SetLogType(const int logLevel, const bool isPerf);
+
+  static int64_t JsAction(long ctxContainer, int32_t jsActionType, const char *arg);
 
  private:
   static ScriptBridgeInMultiSo *g_instance;

@@ -121,7 +121,7 @@ int ScriptSideInSimple::CreateInstance(const char *instanceId, const char *func,
 }
 
 std::unique_ptr<WeexJSResult> ScriptSideInSimple::ExecJSOnInstance(const char *instanceId,
-                                           const char *script) {
+                                           const char *script,int type) {
   LOGD("ScriptSideInSimple::ExecJSOnInstance");
   return runtime_->exeJSOnInstance(String::fromUTF8(instanceId),
                                    String::fromUTF8(script));
@@ -136,6 +136,21 @@ int ScriptSideInSimple::UpdateGlobalConfig(const char *config) {
   LOGD("ScriptSideInSimple::UpdateGlobalConfig");
   return runtime_->updateGlobalConfig(String::fromUTF8(config));
 }
+
+
+int ScriptSideInSimple::UpdateInitFrameworkParams(const std::string& key, const std::string& value, const std::string& desc){
+  LOGD("ScriptSideInSimple::UpdateInitFrameworkParams");
+  return runtime_->UpdateInitFrameworkParams(key ,value, desc);
+}
+
+void ScriptSideInSimple::SetLogType(const int logLevel, const bool isPerf) {
+  //do nothing
+}
+int64_t ScriptSideInSimple::JsAction(long ctxContainer, int32_t jsActionType, const char *arg) {
+
+  return 0;
+}
+
 }  // namespace js
 }  // namespace bridge
 }  // namespace weex

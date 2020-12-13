@@ -29,6 +29,7 @@
 #import "WXNavigationDefaultImpl.h"
 #import "WXURLRewriteDefaultImpl.h"
 #import "WXJSFrameworkLoadDefaultImpl.h"
+#import "WXDarkSchemeDefaultImpl.h"
 
 #import "WXSDKManager.h"
 #import "WXSDKError.h"
@@ -41,6 +42,8 @@
 #import "WXExceptionUtils.h"
 #import "WXConfigCenterProtocol.h"
 #import "WXComponent+Layout.h"
+#import "WXCoreBridge.h"
+#import "WXDarkSchemeModule.h"
 
 @implementation WXSDKEngine
 
@@ -66,6 +69,8 @@
     [self registerModule:@"meta" withClass:NSClassFromString(@"WXMetaModule")];
     [self registerModule:@"webSocket" withClass:NSClassFromString(@"WXWebSocketModule")];
     [self registerModule:@"voice-over" withClass:NSClassFromString(@"WXVoiceOverModule")];
+    [self registerModule:@"sdk-console-log" withClass:NSClassFromString(@"WXConsoleLogModule")];
+    [self registerModule:@"dark-scheme" withClass:NSClassFromString(@"WXDarkSchemeModule")];
 }
 
 + (void)registerModule:(NSString *)name withClass:(Class)clazz
@@ -203,6 +208,7 @@
     [self registerHandler:[WXNavigationDefaultImpl new] withProtocol:@protocol(WXNavigationProtocol)];
     [self registerHandler:[WXURLRewriteDefaultImpl new] withProtocol:@protocol(WXURLRewriteProtocol)];
     [self registerHandler:[WXJSFrameworkLoadDefaultImpl new] withProtocol:@protocol(WXJSFrameworkLoadProtocol)];
+    [self registerHandler:[WXDarkSchemeDefaultImpl new] withProtocol:@protocol(WXDarkSchemeProtocol)];
 }
 
 + (void)registerHandler:(id)handler withProtocol:(Protocol *)protocol
@@ -223,6 +229,12 @@
 
 + (void)initSDKEnvironment
 {
+    if (@available(iOS 13.0, *)) {
+    }
+    else {
+        [WXUtility setDarkSchemeSupportEnable:NO];
+    }
+    
     NSString *fileName = @"weex-main-jsfm";
     NSString *filePath = [[NSBundle bundleForClass:self] pathForResource:fileName ofType:@"js"];
 	if (filePath == nil) {
@@ -259,33 +271,42 @@
 
 + (void)initSDKEnvironment:(NSString *)script
 {
-    WX_MONITOR_PERF_START(WXPTInitalize)
-    WX_MONITOR_PERF_START(WXPTInitalizeSync)
-    
-    if (!script || script.length <= 0) {
-        NSMutableString *errMsg = [NSMutableString stringWithFormat:@"[WX_KEY_EXCEPTION_SDK_INIT_JSFM_INIT_FAILED] script don't exist:%@",script];
-        [WXExceptionUtils commitCriticalExceptionRT:@"WX_KEY_EXCEPTION_SDK_INIT" errCode:[NSString stringWithFormat:@"%d", WX_KEY_EXCEPTION_SDK_INIT] function:@"initSDKEnvironment" exception:errMsg extParams:nil];
-        WX_MONITOR_FAIL(WXMTJSFramework, WX_ERR_JSFRAMEWORK_LOAD, errMsg);
-        return;
-    }
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
+        WX_MONITOR_PERF_START(WXPTInitalize)
+        WX_MONITOR_PERF_START(WXPTInitalizeSync)
+
+        if (!script || script.length <= 0) {
+            NSMutableString *errMsg = [NSMutableString stringWithFormat:@"[WX_KEY_EXCEPTION_SDK_INIT_JSFM_INIT_FAILED] script don't exist:%@",script];
+            [WXExceptionUtils commitCriticalExceptionRT:@"WX_KEY_EXCEPTION_SDK_INIT" errCode:[NSString stringWithFormat:@"%d", WX_KEY_EXCEPTION_SDK_INIT] function:@"initSDKEnvironment" exception:errMsg extParams:nil];
+            WX_MONITOR_FAIL(WXMTJSFramework, WX_ERR_JSFRAMEWORK_LOAD, errMsg);
+            return;
+        }
         [self registerDefaults];
         [[WXSDKManager bridgeMgr] executeJsFramework:script];
+
+        WX_MONITOR_PERF_END(WXPTInitalizeSync)
     });
-    
-    WX_MONITOR_PERF_END(WXPTInitalizeSync)
-    
 }
 
 + (void)registerDefaults
 {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
+        [self _loadRenderPlugins];
         [self _registerDefaultComponents];
         [self _registerDefaultModules];
         [self _registerDefaultHandlers];
     });
+}
+
++ (void)_loadRenderPlugins
+{
+    // Load agil render
+    Class agilRender = NSClassFromString(@"WXAgilRender");
+    if (agilRender) {
+        [agilRender initialize];
+    }
 }
 
 + (NSString*)SDKEngineVersion
@@ -303,7 +324,7 @@ static NSDictionary *_customEnvironment = nil;
 + (void)setCustomEnvironment:(NSDictionary *)environment
 {
     @synchronized (self) {
-        _customEnvironment = environment;
+        _customEnvironment = [environment copy];
     }
 }
 
@@ -367,6 +388,16 @@ static NSDictionary *_customEnvironment = nil;
 + (void)connectDevToolServer:(NSString *)URL
 {
     [[WXSDKManager bridgeMgr] connectToDevToolWithUrl:[NSURL URLWithString:URL]];
+}
+
++ (void)setGlobalDeviceSize:(CGSize)size
+{
+    [WXCoreBridge setDeviceSize:size];
+}
+
++ (CGSize)getGlobalDeviceSize
+{
+    return [WXCoreBridge getDeviceSize];
 }
 
 + (void)_originalRegisterComponents:(NSDictionary *)components {

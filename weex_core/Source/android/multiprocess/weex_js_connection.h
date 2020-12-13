@@ -20,21 +20,69 @@
 #define WEEXJSCONNECTION_H
 
 #include <memory>
+#include <unistd.h>
+#include <sys/mman.h>
 
 class IPCSender;
 class IPCHandler;
 
+
+class WeexConnInfo {
+ public:
+  std::unique_ptr<IPCHandler> handler;
+  int ipcFd;
+
+  WeexConnInfo(std::unique_ptr<IPCHandler> handler, bool isClient) {
+    this->handler = std::move(handler);
+    ipcFd = -1;
+    is_client = isClient;
+    base_mem_ = mmap_for_ipc();
+  }
+
+  ~WeexConnInfo() {
+    closeFd();
+  }
+
+
+  static int memfd_create_below_androidR(const char *name, size_t size);
+  static int memfd_create_androidR(const char *name, size_t size);
+  static int memfd_create(const char *name, size_t size);
+
+  void closeFd() {
+    if(ipcFd == -1) {
+      return;
+    }
+
+    if(hasBeenClosed)
+      return;
+    hasBeenClosed = true;
+    close(ipcFd);
+  }
+
+  void* base_mem_;
+
+ private:
+  void *mmap_for_ipc();
+
+ private:
+  bool hasBeenClosed = false;
+  bool is_client = false;
+};
+
 class WeexJSConnection {
 public:
-    WeexJSConnection();
+    WeexJSConnection(WeexConnInfo* client, WeexConnInfo *server);
 
     ~WeexJSConnection();
 
-    IPCSender *start(IPCHandler *handler, IPCHandler *serverHandler, bool reinit);
+    IPCSender *start(bool reinit);
 
     void end();
 
     IPCSender* sender();
+
+  std::unique_ptr<WeexConnInfo> client_;
+  std::unique_ptr<WeexConnInfo> server_;
 
 private:
     struct WeexJSConnectionImpl;

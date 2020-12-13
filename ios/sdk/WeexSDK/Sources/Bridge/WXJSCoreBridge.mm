@@ -39,6 +39,7 @@
 #import "WXCoreBridge.h"
 #import "WXAnalyzerCenter.h"
 
+
 #import <dlfcn.h>
 
 #import <mach/mach.h>
@@ -80,9 +81,10 @@
 {
     _jsContext.instanceId = nil;
     __block JSContext* theContext = _jsContext;
-    WXPerformBlockOnBridgeThread(^{
-        theContext = nil; // release the context in js thread to avoid main-thread deadlock
-    });
+    _jsContext = nil; // Make sure that the context MUST be freed in JS thread.
+    WXPerformBlockOnBridgeThreadForInstance(^{
+         theContext = nil; // release the context in js thread to avoid main-thread deadlock
+    }, _weexInstanceId);
 }
 
 - (void)setJSContext:(JSContext *)context
@@ -110,18 +112,42 @@
 
 - (void)executeJSFramework:(NSString *)frameworkScript
 {
-
     WXAssertParam(frameworkScript);
-    if (WX_SYS_VERSION_GREATER_THAN_OR_EQUAL_TO(@"8.0")) {
-        [_jsContext evaluateScript:frameworkScript withSourceURL:[NSURL URLWithString:@"weex-main-jsfm.js"]];
-    }else{
-        [_jsContext evaluateScript:frameworkScript];
-    }
+    [_jsContext evaluateScript:frameworkScript withSourceURL:[NSURL URLWithString:@"weex-main-jsfm.js"]];
 }
+
+//static void __checkMutable(id container) {
+//    if ([container isKindOfClass:[NSArray class]]) {
+//        if ([container isKindOfClass:[NSMutableArray class]]) {
+//            printf("This is mutable.");
+//        }
+//        else {
+//            NSUInteger count = [container count];
+//            for (NSUInteger index = 0; index < count; ++index) {
+//                __checkMutable(container[index]);
+//            }
+//        }
+//    }
+//    else if ([container isKindOfClass:[NSDictionary class]]) {
+//        if ([container isKindOfClass:[NSMutableDictionary class]]) {
+//            printf("This is mutable.");
+//        }
+//        else {
+//            NSArray* allKeys = [container allKeys];
+//            for (id key in allKeys) {
+//                __checkMutable(container[key]);
+//            }
+//        }
+//    }
+//}
 
 - (JSValue *)callJSMethod:(NSString *)method args:(NSArray *)args
 {
     WXLogDebug(@"Calling JS... method:%@, args:%@", method, args);
+    WXPerformBlockOnMainThread(^{
+        [[WXBridgeManager sharedManager].lastMethodInfo setObject:method ?: @"" forKey:@"method"];
+        [[WXBridgeManager sharedManager].lastMethodInfo setObject:args ?: @[] forKey:@"args"];
+    });
     return [[_jsContext globalObject] invokeMethod:method withArguments:args];
 }
 
@@ -335,6 +361,13 @@
         
         WXLogDebug(@"callNativeModule...%@,%@,%@,%@", instanceIdString, moduleNameString, methodNameString, argsArray);
         
+        id result = nil;
+        if ([WXCustomPageBridge isCustomPage:instanceIdString]) {
+            if ([[WXCustomPageBridge sharedInstance] forwardCallNativeModuleToCustomPage:instanceIdString moduleName:moduleNameString methodName:methodNameString arguments:argsArray options:optionsDic returnValue:&result]) {
+                return [JSValue valueWithObject:result inContext:[JSContext currentContext]];
+            }
+        }
+        
         NSInvocation *invocation = callNativeModuleBlock(instanceIdString, moduleNameString, methodNameString, argsArray, optionsDic);
         JSValue *returnValue = [JSValue wx_valueWithReturnValueFromInvocation:invocation inContext:[JSContext currentContext]];
         return returnValue;
@@ -352,6 +385,11 @@
         
         WXLogDebug(@"callNativeComponent...%@,%@,%@,%@", instanceIdString, componentNameString, methodNameString, argsArray);
         
+        if ([WXCustomPageBridge isCustomPage:instanceIdString]) {
+            [[WXCustomPageBridge sharedInstance] forwardCallComponentToCustomPage:instanceIdString ref:componentNameString methodName:methodNameString arguments:argsArray options:optionsDic];
+            return;
+        }
+        
         callNativeComponentBlock(instanceIdString, componentNameString, methodNameString, argsArray, optionsDic);
     };
 }
@@ -363,7 +401,7 @@
 
 - (void)resetEnvironment
 {
-    NSDictionary *data = [WXUtility getEnvironment];
+    NSDictionary *data = [WXUtility getEnvironmentForJSContext];
     _jsContext[@"WXEnvironment"] = data;
 }
 
@@ -411,9 +449,7 @@
     __weak typeof(self) weakSelf = self;
     
     _jsContext = [[JSContext alloc] init];
-    if (WX_SYS_VERSION_GREATER_THAN_OR_EQUAL_TO(@"8.0")) {
-        _jsContext.name = @"Weex Context";
-    }
+    _jsContext.name = @"Weex Context";
     
     [WXBridgeContext mountContextEnvironment:_jsContext];
     

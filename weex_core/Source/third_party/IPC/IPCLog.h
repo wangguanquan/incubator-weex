@@ -24,13 +24,8 @@
 
 #ifndef IPCLOG_H
 #define IPCLOG_H
-#include <android/log.h>
-#define TAG "linzj_IPC"
-#define IPC_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
+#include "../../base/log_defines.h"
 
-#if defined(ENABLE_IPC_DEBUG_LOG) && ENABLE_IPC_DEBUG_LOG
-#define IPC_LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, TAG, __VA_ARGS__)
-#else
-#define IPC_LOGD(...)
-#endif
+#define IPC_LOGE(format, ...) LOGE(format, ##__VA_ARGS__)
+#define IPC_LOGD(format, ...) LOGD(format, ##__VA_ARGS__)
 #endif /* IPCLOG_H */

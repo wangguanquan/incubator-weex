@@ -1,3 +1,22 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+#
+
 cmake_minimum_required(VERSION 3.4.1)
 
 set(BASE_LIBRARY_NAME weexbase)
@@ -8,12 +27,14 @@ set(${BASE_LIBRARY_NAME}_SOURCES
     closure.h
     make_copyable.h
     time_calculator.h
+    time_calculator.cpp
     time_point.h
     time_point.cc
     time_unit.h
     #CoreConstants.h
     core_constants.h
     log_defines.h
+    log_defines.cpp
     time_utils.h
     base64/base64.h
     base64/base64.cpp
@@ -44,12 +65,11 @@ set(${BASE_LIBRARY_NAME}_SOURCES
     third_party/icu/icu_utf.cpp
     utils/log_utils.h
     utils/log_utils.cpp
-    utils/ThreadLocker.h
-    utils/ThreadLocker.cpp   
     )
 
 if (ANDROID)
-    if ("${ANDROID_ABI}" STREQUAL "x86")
+    add_definitions(-DOS_ANDROID=1)
+    if ("${ANDROID_ABI}" STREQUAL "x86" OR "${ANDROID_ABI}" STREQUAL "arm64-v8a" OR "${ANDROID_ABI}" STREQUAL "x86_64")
     else ()
       list(APPEND ${BASE_LIBRARY_NAME}_SOURCES
           crash/backtrace.h
@@ -71,6 +91,9 @@ if (ANDROID)
         android/jni/jbytearray_ref.cpp
         android/jni/scoped_java_ref.h
         android/jni/scoped_java_ref.cpp
+        android/jsengine_ptr_container.h
+        android/ThreadLocker.h
+        android/ThreadLocker.cpp
        )
     list(APPEND ${BASE_LIBRARY_NAME}_SOURCES
         ${BASE_ANDROID_SOURCES}
